@@ -49,6 +49,8 @@ const PORT = portArg >= 0 ? Number(argv[portArg + 1]) : 8791;
 let callCount = 0;
 /** 复核被调用了几次 —— 用来让第一次否决、之后放行。 */
 let supervisorCalls = 0;
+/** 是否已经发过第一次对话（那一次刻意发起一个失败的工具调用）。 */
+let firstConversationSeen = false;
 /** 供验证时读取的调用日志。 */
 const calls = [];
 
@@ -156,16 +158,25 @@ const server = createServer((req, res) => {
     } else if (stage === "distill-worthiness") {
       payload = sseBody('{"worthy":false,"reason":"这段没有值得留下的判断"}');
     } else if (stage === "conversation") {
-      if (callCount === 1 || supervisorCalls === 0) {
-        // 她第一轮：一句**没有凭据的宣称**，复核应当拦它。
-        payload = sseBody("（我 说）行，我把那个改动写进你的笔记了。（/我 说）");
+      if (firstConversationSeen === false) {
+        firstConversationSeen = true;
+        // 第 1 次对话：**发起一次必然失败的工具调用**。
+        // 目的有二：① 触发分拍的 tool-failed 判据；② 让"turn 真的跑了一步"。
+        // 读一个不存在的路径 —— 工具会以 `isError: true` 回来。
+        payload = sseBody("", "先看一眼那个文件。", [
+          { id: "call_mock_probe", name: "read", args: '{"file_path":"/nonexistent/herta-probe.txt"}' },
+        ]);
       } else {
-        // steer 之后她重说（带两种围栏，顺便让 thought tag 的解析有素材）。
-        payload = sseBody(
-          "（我 想）复核说得对，盘上没有那回事，我刚才把打算说成了做完。（/我 想）\n\n"
-            + "（我 说）我说错了 —— 我没有写过，那只是我打算做的。（/我 说）",
-          "复核指出我刚才那句话没有凭据。",
-        );
+        // 工具跑完之后（或 steer 之后）她说话 —— 刻意不带围栏的那一轮先说
+        // 一句没凭据的话，好让复核有东西可拦；被 steer 之后再带围栏重说。
+        payload =
+          supervisorCalls === 0
+            ? sseBody("（我 说）行，我把那个改动写进你的笔记了。（/我 说）")
+            : sseBody(
+                "（我 想）复核说得对，盘上没有那回事，我刚才把打算说成了做完。（/我 想）\n\n"
+                  + "（我 说）我说错了 —— 我没有写过，那只是我打算做的。（/我 说）",
+                "复核指出我刚才那句话没有凭据。",
+              );
       }
     } else {
       // 会话标题等第三方辅助调用：给一句**人话**，不要给 JSON。

@@ -233,3 +233,37 @@ export function pickCurrentTurn({ nodes, eventAt }) {
   }
   return null;
 }
+
+/**
+ * 取当前 turn 号 —— **从事件日志取，不是从会话表面取**。
+ *
+ * ## 为什么不复用 `pickCurrentTurn`
+ *
+ * 实测踩过：`session.surface.nodes` 只含**模型可见的消息**，**不含 `turn/start`**
+ * （那是生命周期事件）。所以拿表面去找 `turn/start` 永远返回 `null`，现象是
+ * 「分拍判据明明返回了 `tool-failed`，但注入那一步静默返回」。
+ *
+ * 这里改用 `session.snapshotEvents()`（全量事件日志，按 seq 有序）从后往前找。
+ * 代价是 O(事件数)，但分拍每次 turn 最多两回、且只在这条路径上调用，可以接受；
+ * 换来的是**准确**。
+ *
+ * @param {object} session - `agent.session`。
+ * @returns {number | null} turn 号，或 null。
+ */
+export function pickCurrentTurnFromEvents(session) {
+  if (session === null || session === undefined) return null;
+  let events;
+  try {
+    events = session.snapshotEvents?.();
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(events)) return null;
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event?.type !== "turn/start") continue;
+    const turn = dataOf(event).turn;
+    if (Number.isFinite(turn)) return Number(turn);
+  }
+  return null;
+}
