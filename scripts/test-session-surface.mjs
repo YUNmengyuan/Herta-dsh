@@ -7,7 +7,7 @@
  *
  * 用法：node scripts/test-session-surface.mjs
  */
-import { pickCandidate, pickRecent } from "../src/host/session-surface.js";
+import { pickCandidate, pickCurrentTurn, pickRecent } from "../src/host/session-surface.js";
 
 let pass = 0;
 let fail = 0;
@@ -35,17 +35,17 @@ function makeWorld(events) {
 const user = (seq, text) => ({
   seq,
   type: "user/message",
-  payload: { message: { role: "user", content: [{ type: "text", text }] } },
+  data: { message: { role: "user", content: [{ type: "text", text }] } },
 });
 const herta = (seq, text) => ({
   seq,
   type: "assistant/message",
-  payload: { message: { role: "assistant", content: [{ type: "text", text }] } },
+  data: { message: { role: "assistant", content: [{ type: "text", text }] } },
 });
 const toolResult = (seq, text) => ({
   seq,
   type: "tool/result",
-  payload: { message: { role: "user", content: [{ type: "text", text }] } },
+  data: { message: { role: "user", content: [{ type: "text", text }] } },
 });
 
 console.log("=== pickCandidate ===");
@@ -83,7 +83,7 @@ ok(pickCandidate({ nodes: null, eventAt: () => undefined }) === null, "nodes 为
   const e = {
     seq: 5,
     type: "assistant/message",
-    payload: { message: { content: [{ type: "text", text: "第一句" }, { type: "text", text: "第二句" }] } },
+    data: { message: { content: [{ type: "text", text: "第一句" }, { type: "text", text: "第二句" }] } },
   };
   const c = pickCandidate({ nodes: [5], eventAt: () => e });
   ok(c?.text === "第一句\n第二句", "多个文本块用换行连接", JSON.stringify(c?.text));
@@ -93,13 +93,13 @@ ok(pickCandidate({ nodes: null, eventAt: () => undefined }) === null, "nodes 为
   const e = {
     seq: 6,
     type: "assistant/message",
-    payload: { message: { content: [{ type: "reasoning", text: "心里想想" }] } },
+    data: { message: { content: [{ type: "reasoning", text: "心里想想" }] } },
   };
   ok(pickCandidate({ nodes: [6], eventAt: () => e }) === null, "只有 reasoning 的消息不算候选回话");
 }
 {
   // deriveMessage 优先
-  const e = { seq: 7, type: "assistant/message", payload: { message: { content: [{ type: "text", text: "原始" }] } } };
+  const e = { seq: 7, type: "assistant/message", data: { message: { content: [{ type: "text", text: "原始" }] } } };
   const c = pickCandidate({
     nodes: [7],
     eventAt: () => e,
@@ -109,7 +109,7 @@ ok(pickCandidate({ nodes: null, eventAt: () => undefined }) === null, "nodes 为
 }
 {
   // deriveMessage 抛错要退回
-  const e = { seq: 8, type: "assistant/message", payload: { message: { content: [{ type: "text", text: "兜底" }] } } };
+  const e = { seq: 8, type: "assistant/message", data: { message: { content: [{ type: "text", text: "兜底" }] } } };
   const c = pickCandidate({
     nodes: [8],
     eventAt: () => e,
@@ -167,6 +167,46 @@ console.log("\n=== pickRecent ===");
 ok(pickRecent({ nodes: [], eventAt: () => undefined }) === "", "空表面 → 空串");
 ok(pickRecent({}) === "", "无参数安全");
 ok(pickRecent({ nodes: [1], eventAt: () => undefined }) === "", "事件取不到 → 空串");
+
+console.log("\n=== pickCurrentTurn ===");
+{
+  const w = makeWorld([{ seq: 1, type: "turn/start", data: { turn: 1 } }, user(2, "问"), herta(3, "答")]);
+  ok(pickCurrentTurn({ nodes: w.nodes, eventAt: w.eventAt }) === 1, "找到当前 turn 号");
+}
+{
+  const w = makeWorld([
+    { seq: 1, type: "turn/start", data: { turn: 1 } },
+    herta(2, "第一轮"),
+    { seq: 3, type: "turn/start", data: { turn: 2 } },
+    herta(4, "第二轮"),
+  ]);
+  ok(pickCurrentTurn({ nodes: w.nodes, eventAt: w.eventAt }) === 2, "取最近的那个 turn（不是第一个）");
+}
+{
+  const w = makeWorld([user(1, "还没开始")]);
+  ok(pickCurrentTurn({ nodes: w.nodes, eventAt: w.eventAt }) === null, "表面里没有 turn/start → null");
+}
+ok(pickCurrentTurn({ nodes: [], eventAt: () => undefined }) === null, "空表面 → null");
+ok(pickCurrentTurn({ nodes: null, eventAt: () => undefined }) === null, "nodes 为 null → null");
+{
+  const w = makeWorld([{ seq: 1, type: "turn/start", data: {} }]);
+  ok(pickCurrentTurn({ nodes: w.nodes, eventAt: w.eventAt }) === null, "data 里没有 turn → null（不猜）");
+}
+{
+  const w = makeWorld([{ seq: 1, type: "turn/start", data: { turn: "3" } }]);
+  ok(pickCurrentTurn({ nodes: w.nodes, eventAt: w.eventAt }) === null, "turn 是字符串 → null（不隐式转型）");
+}
+{
+  const w = makeWorld([{ seq: 5, type: "turn/start", data: { turn: 7 } }]);
+  const got = pickCurrentTurn({
+    nodes: [99, 5],
+    eventAt: (seq) => {
+      if (seq === 99) throw new Error("boom");
+      return w.eventAt(seq);
+    },
+  });
+  ok(got === 7, "eventAt 抛错时跳过该 seq 继续往前");
+}
 
 console.log(`\n=== 结果：${pass} 通过 / ${fail} 失败 ===`);
 process.exit(fail === 0 ? 0 : 1);
