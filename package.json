@@ -1,7 +1,7 @@
 {
   "name": "dsh-herta",
   "description": "DSH 插件：把 Herta（黑塔）作为一个 agent 装进 DeepSeek Harness —— 人设、记忆、语音与界面。",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "repository": {
     "type": "git",
     "url": "https://github.com/YUNmengyuan/Herta-dsh.git"
