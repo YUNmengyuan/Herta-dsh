@@ -3,6 +3,24 @@
 把 **Herta（黑塔）** 作为一个插件装进 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)：
 她的人格、她的记忆、她的声音、她的界面。
 
+> ## 📌 来源声明
+>
+> 本项目是**基于原作者项目所做的第三方改造**，不是原创作品。
+>
+> - **原作者项目**：**Herta** —— *THE SELF THAT USES THE AGENT*
+> - **原作者官网**：<https://www.herta-ai.com/#research>
+> - 本项目把 Herta 作为一个**插件**接进 DeepSeek Harness —— 人格、记忆、语音、界面四层
+>   都来自 Herta 原作；插件侧的代码（`src/`、`scripts/`、Cordis 配置）为本次改造新写。
+>
+> 本项目由第三方独立开发，**与 Herta 原作者无任何隶属、合作或背书关系**。
+> 如原作者认为本改造有不妥之处，请联系我，我会立即调整或撤下。
+>
+> 另：「Herta / 黑塔」是 HoYoverse《崩坏：星穹铁道》中的角色。Herta 原作者项目本身
+> 即为**非官方同人作品**，本项目同样是非官方同人作品，与 HoYoverse / miHoYo / Cognosphere
+> **无关联、未获其背书或赞助**。
+>
+> 素材授权细节见 [`THIRD-PARTY.md`](./THIRD-PARTY.md)。
+
 四层，各自独立可验：
 
 | 层 | 内容 | 落在哪 |

@@ -1,5 +1,16 @@
 # 第三方素材与授权
 
+## 上游项目
+
+本插件的素材与人格语料全部来自 **Herta**（原作者项目）：
+
+- **原作者项目**：Herta —— *THE SELF THAT USES THE AGENT*（`PersonaCLI/Herta`）
+- **原作者官网**：<https://www.herta-ai.com/#research>
+
+Herta 为**第三方开发**（其 `LICENSE` 署名 `Copyright (c) 2026 PersonaCLI`），
+且为非官方同人作品。本插件是在 Herta 之上的**第三方改造**，
+**与 Herta 原作者无隶属、合作或背书关系**。
+
 ## `assets/voice/`（80 条 `.opus`，2.5 MB）
 
 **这批音频不在 MIT 授权范围内，不可随本插件再分发。**
