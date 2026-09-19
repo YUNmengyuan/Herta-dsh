@@ -17,12 +17,14 @@ import {
   MAX_VETOES_PER_TURN,
   VERDICT_PASS,
   VERDICT_VETO,
+  VetoBudget,
   buildSupervisorSystemPrompt,
   buildSupervisorUserPrompt,
   buildVetoSteering,
   extractFirstJsonObject,
   normalizeDecision,
   parseSupervisorVerdict,
+  resolveRoute,
 } from "../src/host/supervisor.js";
 import {
   FORCED_SPEECH_OPEN_TAG,
@@ -184,6 +186,62 @@ console.log("\n=== 提示构造 ===");
   ok(parsedOk, "候选里含引号/花括号时 JSON 仍合法");
   ok(buildSupervisorUserPrompt({}).includes("（无）"), "没有近期记录时给占位");
 }
+
+console.log("\n=== resolveRoute：复核用哪个模型 ===");
+{
+  const agentWith = (ctxValue, headerValue) => ({
+    session: {
+      requestContext: () => ctxValue,
+      requestHeader: () => headerValue,
+    },
+  });
+
+  const r1 = resolveRoute(agentWith({ provider: "deepseek-official", model: "deepseek-chat" }, undefined));
+  ok(r1?.provider === "deepseek-official" && r1?.model === "deepseek-chat", "requestContext 优先", JSON.stringify(r1));
+
+  const r2 = resolveRoute(agentWith(undefined, { config: { provider: "p2", model: "m2" } }));
+  ok(r2?.provider === "p2" && r2?.model === "m2", "requestContext 缺失时回退到 requestHeader.config", JSON.stringify(r2));
+
+  ok(resolveRoute(agentWith(undefined, undefined)) === null, "两者都没有 → null（跳过复核，不猜）");
+  ok(resolveRoute(agentWith({ provider: "p" }, { config: { provider: "p2", model: "m2" } }))?.model === "m2", "requestContext 只有 provider 时用兜底");
+  ok(resolveRoute({}) === null, "没有 session → null");
+  ok(resolveRoute(null) === null, "null agent → null");
+  ok(resolveRoute(undefined) === null, "undefined agent → null");
+  ok(
+    resolveRoute({ session: { requestContext: () => { throw new Error("boom"); } } }) === null,
+    "session API 抛错时安全返回 null（不让复核把 turn 弄崩）",
+  );
+  ok(
+    resolveRoute({
+      session: {
+        requestContext: () => { throw new Error("boom"); },
+        requestHeader: () => ({ config: { provider: "p3", model: "m3" } }),
+      },
+    })?.provider === "p3",
+    "requestContext 抛错仍能走兜底",
+  );
+}
+
+console.log("\n=== VetoBudget：一个 turn 的否决配额 ===");
+{
+  const b = new VetoBudget();
+  ok(b.canVeto(1) === true, "新 turn 可以否决");
+  b.record(1);
+  ok(b.canVeto(1) === true, "用掉 1 次仍可");
+  b.record(1);
+  ok(b.canVeto(1) === (MAX_VETOES_PER_TURN > 2), "用满配额后的可否决性与上限一致");
+  while (b.canVeto(1)) b.record(1);
+  ok(b.canVeto(1) === false, "配额耗尽后一律放行（防她永远说不完）");
+  ok(b.canVeto(2) === true, "另一个 turn 有独立配额");
+  ok(b.canVeto(NaN) === false, "turn 号非数字 → 保守拒绝（宁可放行也不循环）");
+}
+{
+  const b = new VetoBudget(1, 3);
+  b.record(1); b.record(2); b.record(3); b.record(4);
+  ok(b.used.size === 3, "只保留最近 keepTurns 个 turn 的账", String(b.used.size));
+  ok(b.used.has(1) === false && b.used.has(4) === true, "淘汰的是最旧的 turn");
+}
+ok(new VetoBudget(2).max === 2, "上限可构造覆盖");
 
 console.log("\n=== 防死循环闸 ===");
 ok(MAX_VETOES_PER_TURN >= 1 && MAX_VETOES_PER_TURN <= 5, "否决上限是一个合理的正数", String(MAX_VETOES_PER_TURN));
