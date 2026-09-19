@@ -340,8 +340,14 @@ node scripts\mock-llm-server.mjs --port 8791
 
 ## ⚠️ 授权
 
-**语音资产与人设语料不在 Herta 的 MIT 范围内，不可随本插件再分发。**
-详见 [`THIRD-PARTY.md`](./THIRD-PARTY.md) —— 公开分发前必须先处理。
+插件代码（`src/`、`lib/`、`scripts/`、Cordis 配置）为本次改造新写，采用 MIT。
+
+**语音资产（`assets/voice/`）与人设语料（`preset/agent.cordis.yml`）不在 Herta 的
+MIT 范围内**，权利归米哈游及各自所有者。本仓库已按《崩坏：星穹铁道》同人衍生作品
+创作指引 V2.0 第三条放置法律声明后收录：**仅限非商业使用，且不得作为独立素材包再分发**。
+
+法律声明原文见 [`NOTICE.md`](./NOTICE.md)；上游授权范围与收录依据见
+[`THIRD-PARTY.md`](./THIRD-PARTY.md)。
 
 ---
 
