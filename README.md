@@ -211,7 +211,18 @@ node scripts\test-beat-policy.mjs    # 分拍判据与配额（61 项）
 node scripts\test-dream-distill.mjs  # 蒸馏提示构造与解析（55 项）
 ```
 
-`npm test` 跑全部八组（共 **314 项**）。
+`npm test` 跑前八组纯逻辑测试（共 **314 项**）；另有 LLM 路径的集成测试
+（28 项，用 mock 的 `ctx.llm` 把管道整条跑通）：
+
+```powershell
+npm run test:integration
+# 等价于 node --import ./scripts/test-resolve-hook.mjs scripts/test-llm-integration.mjs
+```
+
+> 集成测试为什么需要那个 hook：本仓库刻意不带 `node_modules`，而
+> `supervisor-llm.js` / `dream-distill-llm.js` 静态 import `@deepseek-ai/dsh-llm`，
+> 在仓库里直接 import 会 `ERR_MODULE_NOT_FOUND`（在测试目录放软链接也没用 ——
+> ESM 从**被导入文件**的位置解析）。hook 把它指向本机 DSH 运行时那份。
 
 `src/shared/mapping.js` 是**纯函数**、不 import 任何东西，所以 Node 能直接测、
 esbuild 也能原样打进 client bundle —— 一份代码两个消费者，不需要额外构建步骤。
