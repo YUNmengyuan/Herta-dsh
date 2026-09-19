@@ -98,20 +98,19 @@ export async function installNarrativeLayer(ctx) {
         turnStoppingSeen += 1;
         marks.turnStoppingSeen = turnStoppingSeen;
         marks.lastTurnStopping = { turn, hasAgent: agent !== undefined && agent !== null };
-        // 顺手把 agent 上可用的字段记下来 —— 复核需要 provider/model，
-        // 而 SessionHeader 里没有它们（只有 id/cwd/agentPreset），
-        // 下一轮要靠这份实测清单断定该从哪里取路由。
-        if (marks.lastTurnStopping.hasAgent === true && marks.agentShape === undefined) {
+        // 复核需要 provider/model，而 `SessionHeader` 里**没有**它们
+        // （实测只有 id/createdAt/cwd/parentSession/isSeeded/origin/
+        //  delegationDepth/agentPreset）。所以第一次触发时把 agent 的实际形状
+        // 记下来并**打进日志** —— 宿主进程的 globalThis 从外面读不到，
+        // 日志是唯一可靠的出口。下一轮据此写 resolveRoute。
+        if (marks.agentShape === undefined && agent !== undefined && agent !== null) {
+          const keys = (obj) => (obj === null || obj === undefined ? null : Object.keys(obj).slice(0, 50));
           marks.agentShape = {
-            ownKeys: Object.keys(agent).slice(0, 40),
-            hasSession: agent.session !== undefined,
-            sessionKeys:
-              agent.session === undefined ? null : Object.keys(agent.session).slice(0, 40),
-            headerKeys:
-              agent.session?.header === undefined
-                ? null
-                : Object.keys(agent.session.header).slice(0, 40),
+            agentKeys: keys(agent),
+            sessionKeys: keys(agent.session),
+            headerKeys: keys(agent.session?.header),
           };
+          console.log(`[dsh-herta] agent 形状实测: ${JSON.stringify(marks.agentShape)}`);
         }
       }),
     "dsh-herta: narrative turn-stopping probe",
