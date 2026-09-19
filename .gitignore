@@ -1,17 +1,14 @@
-# ── 授权受限的素材：不进公开仓库 ──────────────────────────────────────────
+# ── 素材（随本仓库分发，法律声明见 NOTICE.md）────────────────────────────
 #
-# 见 THIRD-PARTY.md。这两样**不在 Herta 的 MIT 范围内**，上游 LICENSE 的
-# SCOPE 段明确把 data/voice/** 与 packages/herta/prompts/** 排除在外。
-# 本地自用没问题，公开发布不行 —— 所以从版本控制里排除，而不是从磁盘上删掉：
-# 本机的安装与构建照常需要它们。
-#
-#   assets/voice/            80 条 .opus，2.55 MB
+#   assets/voice/            80 条 .opus，2.55 MB —— 角色语音
 #   preset/agent.cordis.yml  内含 HertaBio.txt 人格正本逐字
 #
-# 想让别人 clone 后也能跑，就自己合成/自备这批素材，或按下文 README 的
-# 「本仓库不包含的内容」一节处理。
-assets/voice/
-preset/agent.cordis.yml
+# 这两样不在 Herta 上游的 MIT 范围内（见 THIRD-PARTY.md），现按
+# 《崩坏：星穹铁道》同人衍生作品创作指引 V2.0 第三条放置法律声明后收录，
+# 声明原文见 NOTICE.md。收录不等于授权：素材权利仍归米哈游及各自所有者，
+# 使用仅限非商业用途。
+#
+# 若米哈游要求移除，删掉这两项即可（见 NOTICE.md 末节）。
 
 # ── 安装备份：含本机 home / profile 路径，与发布无关 ──────────────────────
 install-backups/

@@ -32,27 +32,28 @@
 
 ---
 
-## ⚠️ 本仓库不包含的内容（clone 后先看这一节）
+## 📌 素材权利声明（clone 后先看这一节）
 
-这是一个**代码壳仓库**：代码、构建脚本、插件配置、构建产物都在，但
-**两样授权受限的素材被 `.gitignore` 排除了**（原因见 [`THIRD-PARTY.md`](./THIRD-PARTY.md)）：
+本仓库**包含**《崩坏：星穹铁道》的角色素材，**这些素材的权利不属于本仓库作者**：
 
-| 缺的东西 | 干什么用的 | 怎么补齐 |
-|---|---|---|
-| `assets/voice/`（80 条 `.opus`，2.55 MB） | C 层语音：开场白 / 语气词 / 自我收回 / 彩蛋 | 从你本机的 Herta 安装取（Herta 上游 `data/voice/**`） |
-| `preset/agent.cordis.yml`（46 KB） | A 层人格正本（内含 `HertaBio.txt` 逐字） | 跑 `node scripts\build-preset.mjs` 重新生成（见下） |
+> **© 米哈游版权所有**
+>
+> **【《崩坏：星穹铁道》素材的权利归米哈游所有，其他内容的相关权利、利益均归各自所有者享有】**
 
-**不补的后果**：`scripts/install-web.mjs` 的前置检查会直接报「缺语音资产」/「缺 preset」
-并退出 —— 这是刻意的，宁可明确失败，也不要装出一个半残的插件。
+| 素材 | 干什么用的 |
+|---|---|
+| `assets/voice/`（80 条 `.opus`，2.55 MB） | C 层语音：开场白 / 语气词 / 自我收回 / 彩蛋 |
+| `preset/agent.cordis.yml`（46 KB） | A 层人格正本（内含 `HertaBio.txt` 逐字，含引用台词） |
 
-补齐之后，本机使用与构建与完整版完全一致。
+上述声明依据米哈游官方
+**《崩坏：星穹铁道》同人衍生作品创作指引 V2.0**（2024-04-18 生效）第三条放置。
+素材权利未转让，收录**不构成授权**，使用**仅限非商业用途**，
+且不得作为独立素材包再分发（官方指引将「纯搬运」排除在二创许可之外）。
 
-### 没有这两样时还能跑什么
+完整声明、依据、使用者义务与移除方式见 [`NOTICE.md`](./NOTICE.md)；
+Herta 上游项目自身的授权范围见 [`THIRD-PARTY.md`](./THIRD-PARTY.md)。
 
-- `node scripts\test-mapping.mjs`（31 项）、`test-narrative.mjs`（31 项）、
-  `test-dream.mjs`（28 项）—— **纯逻辑单测，不需要素材**
-- `node scripts\build.mjs` / `build-herta-ui.mjs` —— 构建 client 半侧与整机页面
-  （`build-preset.mjs` 需要 `HERTA_SRC`，因为底本与 `HertaBio.txt` 从那里取）
+clone 后**开箱即用，无需自备素材**。
 
 ---
 
