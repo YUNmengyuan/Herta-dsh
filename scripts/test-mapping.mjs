@@ -100,6 +100,58 @@ console.log("\n=== 甲：节点 → 她的 TerminalRecord ===");
   ok(nodesToRecord([{ kind: "context" }]).length === 0, "只有 context 时记录为空");
 }
 
+console.log("\n=== 甲：思考围栏必须被剥掉（2026-09-19 用户报的真 bug）===");
+{
+  // 她按原版语法把内心话写在 （我 想） 里、发言写在 （我 说） 里。
+  // 不剥的话整段思考会被当成她的发言发到整机页面上 —— 实际发生过。
+  const withFences = [
+    { kind: "user", text: "你好" },
+    {
+      kind: "assistant",
+      blocks: [
+        {
+          kind: "text",
+          text: "（我 想）我不能把编的细节说成真的。（/我 想）（我 说）我说错了。（/我 说）",
+        },
+      ],
+    },
+  ];
+  const rec = nodesToRecord(withFences);
+  const herta = rec.filter((b) => b.kind === "herta");
+  ok(herta.length === 1, "还是只有一条她的块");
+  ok(herta[0].text === "我说错了。", "只保留说话部分", JSON.stringify(herta[0].text));
+  ok(!herta[0].text.includes("（我 想）"), "思考围栏没有进记录");
+  ok(!herta[0].text.includes("不能把编的细节"), "**思考内容没有被当成发言**");
+  ok(herta[0].surface === "speech", "标记为 speech 表面");
+
+  // 只有思考、没有说话 → 不该出现在记录里，但要对得上账
+  const onlyThought = nodesToRecord([
+    { kind: "assistant", blocks: [{ kind: "text", text: "（我 想）只想不说。（/我 想）" }] },
+  ]);
+  ok(onlyThought.length === 0, "只有思考的节点不进记录（不能当发言）");
+}
+{
+  // 乙方案（toBubbles）同样要剥
+  const r = toBubbles([
+    {
+      kind: "assistant",
+      seq: 1,
+      time: AT,
+      blocks: [{ kind: "text", text: "（我 想）内心话（/我 想）（我 说）说出口的。（/我 说）" }],
+    },
+  ]);
+  ok(r.bubbles.length === 1, "乙：一条气泡");
+  ok(r.bubbles[0].text === "说出口的。", "乙：只保留说话部分", JSON.stringify(r.bubbles[0].text));
+  ok(!r.bubbles[0].text.includes("内心话"), "乙：思考内容没有进气泡");
+}
+{
+  // 她没写围栏时（早期对话 / 没按语法来）→ 整段当说话，不吞内容
+  const rec = nodesToRecord([
+    { kind: "assistant", blocks: [{ kind: "text", text: "没写围栏的一句话。" }] },
+  ]);
+  ok(rec.length === 1 && rec[0].text === "没写围栏的一句话。", "没有围栏时整段都是说话（不吞内容）");
+}
+
 console.log("\n=== 甲：SessionSnapshot ===");
 {
   const s = fullSnapshot("session-abc", [{ kind: "user", text: "x" }]);

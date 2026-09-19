@@ -8,6 +8,12 @@
  * 为什么用 `.js` 而不是 `.ts`：这样 Node 能直接 import 它做测试，esbuild 也能
  * 原样打包进 client bundle —— 一份代码，两个消费者，不需要额外的构建步骤。
  */
+// 叙述调度层落地后，她的回复里开始按原版语法出现 `（我 想）…（/我 想）` 的
+// **思考围栏**。甲（整机页）的记录块本身有 surface 之分，而 thought surface 她
+// 本来就不渲染 —— 所以**必须在这里把思考剥掉**，否则整段内心话会被当成她的发言
+// 显示出来（2026-09-19 实际发生：用户看到「（我 想）我错在把失败的具体样子填成了
+// 自己顺手编的一版…（/我 想）」被原样发了出去）。
+import { splitSurfaces } from "../host/narrative-hints.js";
 
 // ── 共同的小工具 ────────────────────────────────────────────────────────────
 
@@ -72,17 +78,20 @@ export function toBubbles(nodes) {
       continue;
     }
     if (node.kind === "assistant") {
-      const text = (node.blocks ?? [])
+      const raw = (node.blocks ?? [])
         .filter((b) => b.kind === "text" && typeof b.text === "string")
         .map((b) => b.text)
         .join("");
-      // reasoning 块对应她的 thought surface，而她本来就不渲染 thought。
-      if (text !== "") {
-        bubbles.push({ role: "herta", text, ...stampOf(node.time) });
+      // **与甲方案同一处理**：剥掉她的思考围栏。乙方案同样不该把
+      // `（我 想）…（/我 想）` 那一段当成她说的话显示出来。
+      // 另外 reasoning 块本身也对应 thought surface，而她本来就不渲染 thought。
+      const { thought, speech } = splitSurfaces(raw);
+      if (speech !== "") {
+        bubbles.push({ role: "herta", text: speech, ...stampOf(node.time) });
       } else {
         // 只有思考、没有正文的助手节点也**如实计入降维损失** ——
         // 与工具结果同一标准，否则这个计数器就只是在挑好说的记。
-        droppedKinds.push("assistant:reasoning-only");
+        droppedKinds.push(thought !== "" ? "assistant:thought-only" : "assistant:reasoning-only");
       }
       continue;
     }
@@ -143,11 +152,20 @@ export function nodesToRecord(nodes) {
       continue;
     }
     if (node.kind === "assistant") {
-      const text = (node.blocks ?? [])
+      const raw = (node.blocks ?? [])
         .filter((b) => b.kind === "text" && typeof b.text === "string")
         .map((b) => b.text)
         .join("");
-      if (text !== "") record.push({ kind: "herta", surface: "speech", text, ...stamp });
+      // **剥掉她的思考围栏**：`（我 想）…（/我 想）` 是内心话，她的 thought
+      // surface 本来就不渲染。不剥的话整段思考会被当成 speech 发到整机页面上
+      // （2026-09-19 实际发生 —— 这一条是用户报上来的真 bug）。
+      const speech = splitSurfaces(raw).speech;
+      if (speech !== "") {
+        record.push({ kind: "herta", surface: "speech", text: speech, ...stamp });
+      }
+      // 只有思考、没有说话：**安静丢掉**。甲这条路径没有 `dropped` 出口
+      // （`nodesToRecord` 只返回记录数组，降维统计在乙的 `toBubbles` 上），
+      // 所以这里不记数 —— 但绝不能把思考当成她的发言推出去。
       continue;
     }
     if (node.kind === "tool-result") {
