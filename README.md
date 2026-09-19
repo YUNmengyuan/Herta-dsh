@@ -247,13 +247,36 @@ esbuild 也能原样打进 client bundle —— 一份代码两个消费者，�
 | 提示词资产、语法解析、判决解析、配额闸 | **314 项纯逻辑单测**（Node 里直接跑） | — |
 | 挂载与依赖 | lab 冷启动日志：`plane=preset` + `dsh-llm` 可用 + `llm` 服务就绪 | — |
 | 模型路由可读性 | lab 实测读出 `{"provider":"deepseek-official","model":"deepseek-flash"}` | — |
-| **supervisor 复核的真实行为** | ✅ **管道整条跑通**（28 项集成测试，mock `ctx.llm`）：请求组装 / 流消费 / 判决解析 / **失败一律放行**（无 llm、无路由、流抛错、`finish` 被截断） | 🔴 **真实模型的判决没验过** —— lab 与正式环境都没有 API Key，而且实测发现 **lab 里 `turn-stopping` 根本不触发**（turn 因 `MISSING_CREDENTIAL` 失败时不走该钩子）。「真实模型说 pass 还是 veto」需要真实 API Key 的会话。 |
-| **做梦蒸馏的真实行为** | ✅ **两阶段管道跑通**（同 28 项）：worthiness → generation，不值得时**不再发起生成**；解析失败 / 过短一律拒收 | 🔴 同上：真实模型蒸馏出的候选质量没验。 |
-| **分拍的真实行为** | 判据与配额单测（61 项） | 🔴 需要真实工具调用才触发（无 Key 时不会发生）。 |
-| **thought tag 的渲染** | 语法与解析单测（54 项） | 🔴 需要真实回复里出现围栏才能看到渲染层的呈现。 |
+| LLM 路径的**管道** | **28 项集成测试**（mock `ctx.llm`）：请求组装 / 流消费 / 判决解析 / **失败一律放行**（无 llm、无路由、流抛错、`finish` 被截断） | — |
+| **supervisor 复核的真实闭环** | ✅ **lab 里用假模型服务跑通了整条链**（见下）：她说没凭据的话 → 复核 `veto` → `steer` → 她重想重说 → 复核 `pass` → turn 才结束。日志：`supervisor 否决 turn 1（第 1 次）：她宣称写过笔记，但记录里没有任何写入工具调用` | 真实 **DeepSeek** 的判决质量（它到底会不会正确 veto）。假模型验的是链路与行为，不是判断力。 |
+| **thought tag 的真实渲染** | ✅ 同一次验证里，她重说的回复带 `（我 想）…（/我 想）` 与 `（我 说）…（/我 说）`，页面正确呈现 | 上游那种「逐字揭示」的动画节奏（`reveal-driver`）**没移植**。 |
+| **做梦蒸馏的真实行为** | 两阶段管道跑通 + 解析路径单测 | 🔴 **没验**：假模型服务这次没被蒸馏路径走到（需要她主动调 `herta_dream`）。真实模型蒸馏出的候选质量同样没验。 |
+| **分拍的真实行为** | 判据与配额单测（61 项） | 🔴 **没验**：需要一次真实的**工具失败**，而这次的假模型没有发起工具调用。 |
 
-**一句话**：调度逻辑、失败路径、以及两条 LLM 路径的**管道**都测了；
-**需要真实模型判断力的那一层没测过**。
+**一句话**：调度逻辑、失败路径、两条 LLM 路径的**管道**都测了；
+**supervisor 与 thought tag 的行为在 lab 里用假模型服务实测过**；
+**分拍与蒸馏的行为**、以及**真实 DeepSeek 的判断力**仍未验。
+
+### 怎么在没有 API Key 的环境里验这些
+
+`scripts/mock-llm-server.mjs` —— 一个 OpenAI 兼容的 SSE 假模型服务，
+按 system 提示的词判定阶段（复核 / 蒸馏 / 对话 / 第三方辅助调用），
+并让**第一次复核 veto、之后 pass**，于是一次会话就能看到完整的自我收回往返。
+
+它**不碰任何真实凭据**：DeepSeek provider 的配置里只放凭据的「名字」
+（`apiKeyEnv`），密钥不进配置 —— 所以 lab 指向它时用的是假的环境变量名。
+
+```powershell
+node scripts\mock-llm-server.mjs --port 8791
+# 然后在**只属于 lab** 的 profile patch 里把 llm-deepseek 指向它：
+#   - id: llm-deepseek
+#     config: { baseURL: http://127.0.0.1:8791, apiKeyEnv: DEEPSEEK_API_KEY, models: [{id: deepseek-flash, …}] }
+# 并用一个假值启动 lab：$env:DEEPSEEK_API_KEY='mock-key-for-lab-verification'
+# 验完记得还原 patch（别让它进正式配置）。
+```
+
+> 这一条路是**踩出来的**：此前几轮都以为「没有 Key 就验不了真实链路」。
+> 其实要分开看 —— **真实模型回什么**验不了，但**行为链路**能验。
 
 ### 其余缺口
 
