@@ -1,0 +1,42 @@
+{
+  "name": "dsh-herta",
+  "description": "DSH 插件：把 Herta（黑塔）作为一个 agent 装进 DeepSeek Harness —— 人设、记忆、语音与界面。",
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YUNmengyuan/Herta-dsh.git"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib",
+    "assets",
+    "cordis.patch.yml"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:preset": "node scripts/build-preset.mjs",
+    "build:ui": "node scripts/build-herta-ui.mjs",
+    "deploy": "node scripts/deploy.mjs",
+    "install:web": "node scripts/install-web.mjs",
+    "test": "node scripts/test-narrative.mjs && node scripts/test-dream.mjs && node scripts/test-mapping.mjs"
+  }
+}

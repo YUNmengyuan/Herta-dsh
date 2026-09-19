@@ -1,0 +1,175 @@
+/**
+ * 「Herta 整机」页面里的 bridge 实现（甲方案）。
+ *
+ * 结构：iframe 里的这个 bridge 把每个调用**转发给父窗口**（DSH 页面里的
+ * client 插件），父窗口用 DSH 的客户端服务回答；事件反向推送。
+ *
+ * 用 postMessage 而不是让 iframe 直接连 DSH 的 /api：
+ *   · iframe 不需要懂 DSH 的传输协议（WebSocket + RPC），协议只在父窗口那一侧
+ *   · 父窗口本来就已经拿着 `uiConversation.binding(sessionId).target('chat')`
+ *     这份组装好的数据（乙路线已经验证过这条路径）
+ *   · 同源，postMessage 不需要额外鉴权
+ *
+ * 这个文件只依赖 Herta 的 `HertaBridge` 契约（92 成员 / 43 必填，见
+ * `@gui/ipc/bridge-types`）。所有可选成员**一律不实现** —— 上游的契约是
+ * 省略即优雅隐藏（官网的 demo bridge 就省了 45 个可选成员，渲染层照常工作）。
+ */
+
+type Listener = (payload: unknown) => void;
+
+const listeners = new Map<string, Set<Listener>>();
+
+/**
+ * 每个事件名最后一条载荷。
+ *
+ * **这是必须的**：父窗口推数据时，渲染层的 store 可能还没订阅（它的订阅发生在
+ * `HertaBridgeProvider` 的 effect 里，而 postMessage 是异步到达的）。
+ * 不重放的话，那次 reset 就永远丢了 —— 现象是「她的界面起来了、但会话是空的」，
+ * 而且不会再恢复。真实 Electron preload 的语义也是这样：新订阅者立刻拿到当前状态。
+ */
+const lastPayload = new Map<string, unknown>();
+
+/** 订阅一个由父窗口推送的事件；有缓存则立刻补一条。 */
+function on(event: string, cb: Listener): () => void {
+  let set = listeners.get(event);
+  if (set === undefined) {
+    set = new Set();
+    listeners.set(event, set);
+  }
+  set.add(cb);
+
+  if (lastPayload.has(event)) {
+    const replay = lastPayload.get(event);
+    // 异步补发：订阅发生在 effect 里，同步回调会在渲染过程中触发 setState。
+    queueMicrotask(() => {
+      if (set.has(cb)) cb(replay);
+    });
+  }
+
+  return () => {
+    set.delete(cb);
+  };
+}
+
+let seq = 0;
+const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+
+/** 父窗口是否已经出现过（用来判断是嵌在 DSH 里还是被单独打开）。 */
+let parentSeen = false;
+
+window.addEventListener("message", (event: MessageEvent) => {
+  const msg = event.data as { __herta?: boolean; kind?: string; id?: number; value?: unknown; error?: string; event?: string; payload?: unknown };
+  if (msg === null || typeof msg !== "object" || msg.__herta !== true) return;
+  parentSeen = true;
+  if (msg.kind === "reply") {
+    const slot = pending.get(msg.id as number);
+    if (slot === undefined) return;
+    pending.delete(msg.id as number);
+    if (typeof msg.error === "string") slot.reject(new Error(msg.error));
+    else slot.resolve(msg.value);
+    return;
+  }
+  if (msg.kind === "event" && typeof msg.event === "string") {
+    lastPayload.set(msg.event, msg.payload);
+    for (const cb of listeners.get(msg.event) ?? []) cb(msg.payload);
+  }
+});
+
+/** 调用父窗口。父窗口没应答就超时失败，由调用方决定降级值。 */
+function call<T>(method: string, params?: unknown, timeoutMs = 8_000): Promise<T> {
+  const id = (seq += 1);
+  return new Promise<T>((resolve, reject) => {
+    pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+    window.parent.postMessage({ __herta: true, kind: "call", id, method, params }, "*");
+    setTimeout(() => {
+      if (pending.delete(id)) reject(new Error(`父窗口没有应答：${method}`));
+    }, timeoutMs);
+  });
+}
+
+/** 带降级的调用：父窗口不可用时用默认值，界面不至于白屏。 */
+function callOr<T>(method: string, fallback: T, params?: unknown): Promise<T> {
+  return call<T>(method, params).catch(() => fallback);
+}
+
+/**
+ * 造一个 bridge。
+ *
+ * 事件类成员（`onXxx`）不在这里推送 —— 由父窗口发 `{kind:'event'}` 过来。
+ * 唯一例外是兜底：如果一小会儿之后父窗口从没出现过（被单独打开调试），
+ * 主动推一个 `noSession`，让渲染层走它的「未连接」分支而不是一直转圈。
+ */
+export function createBridge() {
+  // 报个到。父窗口收到 hello 后才知道该往这边推初始的 reset
+  //（不推的话渲染层会一直停在启动画面）。
+  window.parent.postMessage({ __herta: true, kind: "hello" }, "*");
+
+  // 兜底：如果一小会儿之后父窗口从没出现过（这一页被单独打开调试），
+  // 自己推一个 noSession，让渲染层走「未连接」分支而不是一直转圈。
+  setTimeout(() => {
+    if (!parentSeen) {
+      for (const cb of listeners.get("reset") ?? []) cb({ noSession: true });
+    }
+  }, 800);
+
+  return {
+    platform: "win32",
+    // Electron 43 起 File.path 被移除，真实拖放在浏览器里拿不到路径。
+    // 官网就是这个做法：返回空串，composer 会过滤掉空路径。
+    pathForFile: () => "",
+
+    // ── 会话生命周期 ──────────────────────────────────────────────────────
+    submitText: (text: string, stagedImageIds?: readonly string[]) =>
+      call("submitText", { text, stagedImageIds }),
+    interrupt: (turnId?: string) => callOr("interrupt", { ok: false }, { turnId }),
+    rewindLastTurn: (sessionId: string) => call("rewindLastTurn", { sessionId }),
+    maybePlayEasterEgg: () => callOr("maybePlayEasterEgg", undefined),
+    listSessions: () => callOr("listSessions", []),
+    openSession: (sessionId: string) => call("openSession", { sessionId }),
+    createSession: (opts: unknown) => call("createSession", { opts }),
+    deleteSession: (sessionId: string) =>
+      callOr("deleteSession", { ok: false, wasActive: false }, { sessionId }),
+    resolveApproval: (opts: unknown) => callOr("resolveApproval", { ok: false, reason: "no_pending_overlay" }, { opts }),
+
+    // ── 工作区 / 附件（浏览器里都没有真正的实现，按契约降级）──────────────
+    pickWorkspace: async () => null,
+    setWorkspace: async () => ({ ok: false, message: "由 DSH 侧管理工作区" }),
+    resetWorkspace: async () => ({ ok: false, message: "由 DSH 侧管理工作区" }),
+    pickAttachments: async () => null,
+    attachFiles: async () => ({ ok: false, message: "整机视图不支持附件" }),
+    removeAttachment: async () => ({ ok: true }),
+    stageImages: async () => ({ ok: false, message: "整机视图不支持图片暂存" }),
+    unstageImage: async () => false,
+
+    // ── 设置 ──────────────────────────────────────────────────────────────
+    getDreamConfig: () => callOr("getDreamConfig", { enabled: true }),
+    setDreamConfig: async () => {},
+    getLocale: () => callOr("getLocale", "zh"),
+    setLocale: async () => {},
+    getCloseToTray: async () => true,
+    setCloseToTray: async () => {},
+    getDeepSeekKeyStatus: () => callOr("getDeepSeekKeyStatus", { set: true, hint: "dsh", encrypted: true }),
+    // 密钥由 DSH 自己管，这里如实拒绝而不是假装成功。
+    setDeepSeekKey: async () => ({ ok: false, reason: "rejected" as const }),
+    clearDeepSeekKey: async () => ({ ok: true as const, status: { set: false, hint: "", encrypted: false } }),
+
+    // ── 窗口控制（iframe 里没有窗口可言，全部空实现）──────────────────────
+    windowMinimize: () => {},
+    windowToggleMaximize: () => {},
+    windowClose: () => {},
+    windowIsMaximized: async () => false,
+    onWindowMaximized: (cb: Listener) => on("windowMaximized", cb),
+
+    // ── 推送事件 ──────────────────────────────────────────────────────────
+    onWorkspace: (cb: Listener) => on("workspace", cb),
+    onRecord: (cb: Listener) => on("record", cb),
+    onOverlay: (cb: Listener) => on("overlay", cb),
+    onSpeech: (cb: Listener) => on("speech", cb),
+    onAgent: (cb: Listener) => on("agent", cb),
+    onTurn: (cb: Listener) => on("turn", cb),
+    onReset: (cb: Listener) => on("reset", cb),
+    onTitle: (cb: Listener) => on("title", cb),
+    onSessionDeleted: (cb: Listener) => on("sessionDeleted", cb),
+    onVoice: (cb: Listener) => on("voice", cb),
+  };
+}

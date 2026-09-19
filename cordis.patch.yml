@@ -1,0 +1,9 @@
+# dsh-herta：把黑塔作为一个 agent（人设 + 记忆 + 语音）与一套界面装进 DSH。
+#
+# 注意：`dsh plugin add dsh-herta` 会把这个包同时写进 profile 的
+# dependencies 与 dsh.profile.bundles，而包自带的这份 patch 会自动应用。
+# 因此**不要再手改 profile 的 cordis.patch.yml** —— 会产生重复的 loader
+# 条目 id，profile 直接启动失败。
+- insert:
+    - id: herta
+      name: dsh-herta

@@ -1,0 +1,23 @@
+# ── 授权受限的素材：不进公开仓库 ──────────────────────────────────────────
+#
+# 见 THIRD-PARTY.md。这两样**不在 Herta 的 MIT 范围内**，上游 LICENSE 的
+# SCOPE 段明确把 data/voice/** 与 packages/herta/prompts/** 排除在外。
+# 本地自用没问题，公开发布不行 —— 所以从版本控制里排除，而不是从磁盘上删掉：
+# 本机的安装与构建照常需要它们。
+#
+#   assets/voice/            80 条 .opus，2.55 MB
+#   preset/agent.cordis.yml  内含 HertaBio.txt 人格正本逐字
+#
+# 想让别人 clone 后也能跑，就自己合成/自备这批素材，或按下文 README 的
+# 「本仓库不包含的内容」一节处理。
+assets/voice/
+preset/agent.cordis.yml
+
+# ── 安装备份：含本机 home / profile 路径，与发布无关 ──────────────────────
+install-backups/
+
+# ── 构建与运行残留 ────────────────────────────────────────────────────────
+node_modules/
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,228 @@
+/**
+ * dsh-herta 的构建脚本。
+ *
+ * 产出两个文件到 lib/：
+ *   lib/index.js    —— host 半侧（直接从 src/host 拷贝，目前是纯 JS，无需编译）
+ *   lib/client.js   —— client 半侧（esbuild 打包，外面套 DSH 的模块加载器）
+ *
+ * 三件关键的事：
+ *
+ * 1. **模块加载器包装**。DSH 的客户端插件不是普通 ESM 文件，而是往
+ *    `window.__ModuleLoader__.load({id, factory})` 注册一个工厂。loader 会把
+ *    一个同步 `require` 交给工厂，它只认「平台种子词」与启动图里已注册的包。
+ *    所以产物必须是 CJS 形态，并用 banner/footer 把 esbuild 的输出包进工厂里。
+ *
+ * 2. **平台种子词必须 external**。外壳冻结了一张模块表，一共只有 9 项
+ *    （react / react-dom / cordis / dsh-client-store / ui-slots / ui-primitives /
+ *    ui-dockkit）。react 尤其必须 external —— 打进两份 React 会让 hooks 直接崩。
+ *
+ * 3. **`.js` → `.ts(x)` 解析**。Herta 源码是 NodeNext 风格：TS 文件之间用
+ *    `import x from "./y.js"` 互相引用。磁盘上没有 y.js，只有 y.ts/y.tsx。
+ *    esbuild 默认不会做这个替换，必须自己接一个 onResolve。
+ */
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = resolve(here, "..");
+const outDir = join(root, "lib");
+
+/** Herta 源码树；界面组件从这里取。可用 HERTA_SRC 覆盖。 */
+const HERTA_SRC = process.env.HERTA_SRC ?? "E:\\deepseek工作区\\Herta-src";
+/** Herta 渲染层根目录 —— 等价于官网 vite 配置里的 `@gui` 别名。 */
+const HERTA_RENDERER = join(HERTA_SRC, "packages", "gui", "src", "renderer");
+
+/**
+ * DSH 客户端平台种子词。取自运行中外壳的冻结模块表
+ * （`dsh-web-frontend/dist/assets/index-*.js` 里的 `function by()`）。
+ * 只有这些可以 external；其余必须打进 bundle。
+ */
+const PLATFORM_SEED = [
+  "react",
+  "react/jsx-runtime",
+  "react-dom",
+  "react-dom/client",
+  "@deepseek-ai/cordis",
+  "@deepseek-ai/dsh-client-store",
+  "@deepseek-ai/dsh-client-ui-slots",
+  "@deepseek-ai/dsh-client-ui-primitives",
+  "@deepseek-ai/dsh-client-ui-dockkit",
+];
+
+/** 本机没有独立安装 esbuild，从 Herta 仓库的 pnpm 虚拟 store 里取。 */
+function findEsbuild() {
+  const candidates = [
+    join(HERTA_SRC, "node_modules", ".pnpm", "esbuild@0.25.12", "node_modules", "esbuild"),
+    join(HERTA_SRC, "node_modules", ".pnpm", "esbuild@0.28.1", "node_modules", "esbuild"),
+  ];
+  for (const dir of candidates) {
+    const entry = join(dir, "lib", "main.js");
+    if (existsSync(entry)) return entry;
+  }
+  throw new Error(
+    `找不到 esbuild。试过：\n  ${candidates.map((c) => join(c, "lib", "main.js")).join("\n  ")}`,
+  );
+}
+
+/** 尝试给一个无后缀/错后缀的路径补出真实文件。 */
+function firstExistingFile(base) {
+  const candidates = [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}.js`,
+    `${base}.jsx`,
+    `${base}.mjs`,
+    `${base}.css`,
+    join(base, "index.ts"),
+    join(base, "index.tsx"),
+    join(base, "index.js"),
+  ];
+  for (const c of candidates) {
+    if (existsSync(c) && statSync(c).isFile()) return c;
+  }
+  return null;
+}
+
+/** `@gui/x` → Herta 渲染层下的 x。 */
+const guiAlias = {
+  name: "dsh-herta:gui-alias",
+  setup(build) {
+    build.onResolve({ filter: /^@gui(\/|$)/ }, (args) => {
+      const rest = args.path.replace(/^@gui\/?/, "");
+      const found = firstExistingFile(join(HERTA_RENDERER, rest));
+      if (found === null) {
+        return { errors: [{ text: `@gui 解析失败：${args.path}` }] };
+      }
+      return { path: found };
+    });
+  },
+};
+
+/** `./y.js` → 磁盘上的 `y.ts` / `y.tsx`。 */
+const jsToTs = {
+  name: "dsh-herta:js-to-ts",
+  setup(build) {
+    build.onResolve({ filter: /\.js$/ }, (args) => {
+      if (!args.path.startsWith(".") && !args.path.startsWith("/")) return null;
+      if (args.importer === "") return null;
+      const base = resolve(dirname(args.importer), args.path.slice(0, -3));
+      for (const ext of [".ts", ".tsx"]) {
+        if (existsSync(base + ext) && statSync(base + ext).isFile()) {
+          return { path: base + ext };
+        }
+      }
+      return null; // 真的 .js，交回默认解析
+    });
+  },
+};
+
+/**
+ * Herta 的全局样式表在 DSH 里必须被改造，原因有三：
+ *
+ * 1. `:root` 在 shadow root 里**不匹配任何元素** —— 而 Herta 的全部配色变量
+ *    （56 处）都定义在 `:root` 上，不改就等于整张表失效。
+ * 2. `:root[data-theme="dark"] …`（53 条）同理，要变成 `:host([data-theme="dark"]) …`。
+ * 3. `html` / `body` 的三条规则是**整页 chrome**（宇宙渐变背景、100vh 居中网格、
+ *    fixed 模糊光晕）。嵌进 DSH 的对话框里它们是错的，直接删掉；只把
+ *    「颜色 + 字体 + 不可选中」这三件真正需要继承的事补到 `:host` 上。
+ *
+ * 这样 Herta 的样式被完整关进 shadow root：既拿得到自己的变量，也碰不到 DSH 的壳。
+ */
+const HERA_HOST_BASE = `:host{color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;user-select:none;}`;
+
+const STRIP_PAGE_CHROME = [
+  /body:before\s*\{[^}]*\}/g,
+  /body:after\s*\{[^}]*\}/g,
+  /(?<![\w.#-])body\s*\{[^}]*\}/g,
+  /(?<![\w.#-])html\s*\{[^}]*\}/g,
+];
+
+function transformHertaCss(raw) {
+  let css = raw;
+  for (const pattern of STRIP_PAGE_CHROME) css = css.replace(pattern, "");
+  // 先换带主题的那一形态，再换裸 `:root`
+  css = css.replace(/:root\[data-theme="dark"\]/g, ':host([data-theme="dark"])');
+  css = css.replace(/:root/g, ":host");
+
+  const leftover = css.match(/(?<![\w.#-])(?:html|body)\s*\{/);
+  if (leftover !== null) {
+    throw new Error(`CSS 转换后仍残留整页选择器：${leftover[0]}`);
+  }
+  if (!css.includes(":host{")) {
+    throw new Error("CSS 转换后没有 :host 变量块 —— 变量定义可能改了写法，需要更新转换逻辑");
+  }
+  return HERA_HOST_BASE + css;
+}
+
+/** 把 Herta 的全局样式表当字符串模块喂给 bundle（已做 shadow DOM 改造）。 */
+const hertaCss = {
+  name: "dsh-herta:herta-css",
+  setup(build) {
+    build.onLoad({ filter: /reference-ux\.css$/ }, (args) => {
+      const raw = readFileSync(args.path, "utf8");
+      const transformed = transformHertaCss(raw);
+      console.log(
+        `样式表 ${(raw.length / 1024).toFixed(0)} KB → ${(transformed.length / 1024).toFixed(0)} KB（已转 :host、去整页 chrome）`,
+      );
+      return { contents: `export default ${JSON.stringify(transformed)};`, loader: "js" };
+    });
+  },
+};
+
+const BANNER = `window.__ModuleLoader__.load({ id: "dsh-herta", factory: (require) => {
+var module = { exports: {} };
+var exports = module.exports;`;
+
+const FOOTER = `return module.exports;
+}});`;
+
+async function main() {
+  if (!existsSync(HERTA_RENDERER)) {
+    throw new Error(`找不到 Herta 渲染层：${HERTA_RENDERER}（可用 HERTA_SRC 覆盖）`);
+  }
+
+  const esbuildEntry = findEsbuild();
+  const esbuild = await import(pathToFileURL(esbuildEntry).href);
+
+  mkdirSync(outDir, { recursive: true });
+
+  // host 半侧：纯 JS，逐文件拷贝（不是只拷 index.js —— 模块会越加越多）。
+  const hostSrc = join(root, "src", "host");
+  for (const name of readdirSync(hostSrc)) {
+    if (name.endsWith(".js")) copyFileSync(join(hostSrc, name), join(outDir, name));
+  }
+
+  // client 半侧：打包。
+  const result = await esbuild.build({
+    entryPoints: [join(root, "src", "client", "index.tsx")],
+    outfile: join(outDir, "client.js"),
+    bundle: true,
+    format: "cjs",
+    platform: "browser",
+    target: "es2022",
+    jsx: "automatic",
+    external: PLATFORM_SEED,
+    plugins: [guiAlias, jsToTs, hertaCss],
+    banner: { js: BANNER },
+    footer: { js: FOOTER },
+    legalComments: "none",
+    logLevel: "warning",
+    metafile: true,
+  });
+
+  const bytes = Object.values(result.metafile.outputs).reduce((n, o) => n + o.bytes, 0);
+  console.log(`lib/index.js   已生成（host 半侧）`);
+  console.log(`lib/client.js  已生成（client 半侧，${(bytes / 1024).toFixed(1)} KB）`);
+
+  // 自检：确认外部依赖真的没被打进来。
+  for (const seeded of ["react", "react/jsx-runtime"]) {
+    if (!result.metafile.inputs[`${seeded}`] && !Object.keys(result.metafile.inputs).some((k) => k.includes(`node_modules/${seeded}/`))) {
+      continue;
+    }
+    throw new Error(`${seeded} 被打进了 bundle —— 它必须保持 external`);
+  }
+}
+
+await main();
