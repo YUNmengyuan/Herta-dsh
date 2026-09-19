@@ -258,6 +258,37 @@ esbuild 也能原样打进 client bundle —— 一份代码两个消费者，�
 用假模型服务实测过**；**只剩「真实 DeepSeek 的判断力与语气质量」没验** ——
 那需要真实凭据，且不属于代码正确性的范畴。
 
+### 怎么确认叙述层真的在跑（启动信标）
+
+叙述层**在放行的时候不留痕迹**：复核判 `pass` 就不注入、不写会话记录。所以在正式
+环境里，光看会话记录区分不出「复核跑了并放行」与「复核压根没跑」。
+
+`src/host/narrative-beacon.js` 把「跑到哪一步」写成一份**可读证据**，落在
+`$DSH_HOME/dsh-herta-narrative.json`（lab 与正式环境各一份，互不覆盖）：
+
+```jsonc
+{
+  "verdict": "叙述层在跑：复核执行过",
+  "phases": {
+    "install":  { "pid": 123, "depsOk": true },      // 钩子挂上了
+    "llm":      { "ok": true },                      // llm 服务拿到了
+    "turnStop": { "n": 3, "turn": 3 },               // turn 边界钩子触发过
+    "review":   { "n": 3, "verdict": "pass" },       // 复核真的执行过（pass 也记）
+    "beat":     { "n": 1, "kind": "tool-failed" }    // 分拍判据执行过
+  }
+}
+```
+
+`verdict` 可直接读作结论。**只放阶段名、计数、时间与 pid，不放任何对话内容。**
+
+```powershell
+Get-Content 'E:\DeepSeek H\data\home\.dsh\dsh-herta-narrative.json'   # 正式环境
+Get-Content 'E:\deepseek工作区\herta-lab\.dsh\dsh-herta-narrative.json' # lab
+```
+
+> **`turnStop` 那一条是「它活着」最硬的信号** —— 比「有没有人 veto」硬得多：
+> 放行不留痕迹，而钩子被触发过就说明链路接上了。
+
 ### 怎么在没有 API Key 的环境里验这些
 
 `scripts/mock-llm-server.mjs` —— 一个 OpenAI 兼容的 SSE 假模型服务，
