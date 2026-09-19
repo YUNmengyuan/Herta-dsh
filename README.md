@@ -121,6 +121,44 @@ iframe 是**独立文档**，所以她的原版样式**原样使用**（`:root` 
 `grid-template-rows:1fr auto` 里那个 `auto` 行会跟着子项自己塌，对话区直接长满
 （实测 452px → 512px），不留空档也不出双重滚动条。
 
+### 叙述调度层（她的「自我叙述」）
+
+她的原版里有一层**演员调度**：说什么、怎么分拍、什么时候自我收回、开口之前先想什么。
+这一层在上游骑在**她自己的编码后端**上（`packages/herta/src/narrative/`，46 个模块
+1.29 MB）。本插件**不移植那个后端**（DSH 就是后端），只把调度逻辑接到
+**DSH 的 agent loop** 上。
+
+完整设计（已核实的 DSH API、机制映射、踩过的坑）见
+[`docs/叙述调度层设计.md`](./docs/叙述调度层设计.md)。要点：
+
+**她的叙述语法**
+
+```
+（我 想）……（/我 想）      思考 —— 内心判断，不进用户视野
+（我 说）……（/我 说）      说话 —— 真正说给开拓者的话
+```
+
+四组围栏在 zh/en 两种语言下**都是中文**（上游 `thought-hint.ts:16-18`：它们是语法
+记号，不是指导语）。`src/host/narrative-hints.js` 把这套语法与上游的提示词资产
+**逐字移植**进来（含 supervisor 否决模板、rethink/respeak 两阶段、三种分拍提示）。
+
+**四种行为，各自落在 DSH 的哪个钩子上**
+
+| 行为 | 落点 | 要 LLM 调用？ |
+|---|---|---|
+| **分拍**（干活中途补一句点评） | `tools/result` → 判据 → `agent.steer` | 否 |
+| **自我收回 / supervisor 复核** | `agent/turn-stopping`（turn 关闭前被 await）→ 独立复核 → `steer` 让她重说 | **是** |
+| **thought tag** | 输出里的围栏，由渲染层（乙 / 甲）呈现 | 否 |
+| **做梦蒸馏** | `herta_dream` 的 `distill: true` → 宿主另起调用蒸馏候选 → 过门 → 落账 | **是** |
+
+三条安全底线（缺一条都会出真问题）：**任何失败一律放行**（复核坏了不该让她说不出话）/
+**配额到顶一律放行**（`steer` 会让 turn 继续，持续否决她将永远说不完）/
+**拿不到模型路由就跳过**（`provider`/`model` 是必填，不猜）。
+
+> **一个必须知道的语义差距**：DSH 的 `agent.steer` 在**下一个 step 边界**生效，
+> 不像上游能在后端事件发生当拍插话。所以分拍是「事件后一个 step 补评」——
+> 效果等价，时机晚一拍。
+
 ### 两条静态路由
 
 都是**白名单**：启动时扫出文件索引，请求路径必须命中，否则 404。不存在路径穿越的
@@ -163,12 +201,17 @@ node scripts\build.mjs           # client 半侧（esbuild + 模块加载器包�
 node scripts\build-preset.mjs    # agent preset（以随附 standard 为底，只换 persona 行）
 node scripts\build-herta-ui.mjs  # 整机页面
 node scripts\deploy.mjs          # 三样都构建 + 镜像进 lab profile
-node scripts\test-narrative.mjs  # 货架逻辑（31 项）
-node scripts\test-dream.mjs      # 做梦逻辑（28 项）
-node scripts\test-mapping.mjs    # DSH↔Herta 映射（31 项）
+node scripts\test-narrative.mjs      # 货架逻辑（31 项）
+node scripts\test-dream.mjs          # 做梦逻辑（28 项）
+node scripts\test-mapping.mjs        # DSH↔Herta 映射（31 项）
+node scripts\test-narrative-hints.mjs  # 叙述语法与提示词资产（54 项）
+node scripts\test-supervisor.mjs     # 复核：判决解析 / 路由 / 否决配额（81 项）
+node scripts\test-session-surface.mjs  # 会话表面提取：候选回话 / 摘要 / turn（32 项）
+node scripts\test-beat-policy.mjs    # 分拍判据与配额（61 项）
+node scripts\test-dream-distill.mjs  # 蒸馏提示构造与解析（55 项）
 ```
 
-`npm test` 跑后三个（共 90 项）。
+`npm test` 跑全部八组（共 **314 项**）。
 
 `src/shared/mapping.js` 是**纯函数**、不 import 任何东西，所以 Node 能直接测、
 esbuild 也能原样打进 client bundle —— 一份代码两个消费者，不需要额外构建步骤。
@@ -183,6 +226,24 @@ esbuild 也能原样打进 client bundle —— 一份代码两个消费者，�
 ---
 
 ## 已知缺口
+
+### ⚠️ 叙述调度层：哪些验过、哪些**没验**
+
+如实分开写，别把「代码写完了」当成「验过了」：
+
+| 部分 | 验到了什么 | **没验到** |
+|---|---|---|
+| 提示词资产、语法解析、判决解析、配额闸 | **314 项纯逻辑单测**（Node 里直接跑） | — |
+| 挂载与依赖 | lab 冷启动日志：`plane=preset` + `dsh-llm` 可用 + `llm` 服务就绪 | — |
+| 模型路由可读性 | lab 实测读出 `{"provider":"deepseek-official","model":"deepseek-flash"}` | — |
+| **supervisor 复核的真实行为** | 只到「组装出合法请求」 | 🔴 **完整闭环没验过**：lab 与正式环境**都没有 API Key**，而且实测发现 **lab 里 `turn-stopping` 根本不触发**（turn 因 `MISSING_CREDENTIAL` 失败时不走该钩子）。所以「判决 → 否决 → 她重说」这条链**需要真实 API Key 的会话才能验**。 |
+| **做梦蒸馏的真实行为** | 只到「组装出合法请求」+ 解析路径单测 | 🔴 同上，需要一次真实模型调用。 |
+| **分拍的真实行为** | 判据与配额单测 | 🔴 需要真实工具调用才触发（无 Key 时不会发生）。 |
+| **thought tag 的渲染** | 语法与解析单测 | 🔴 需要真实回复里出现围栏才能看到渲染层的呈现。 |
+
+**一句话**：调度逻辑与它的失败路径**都测了**；**需要真实模型的那些行为没测过**。
+
+### 其余缺口
 
 - **五个工具从未在真实会话里被调用过** —— 只验证到「进了工具表」与纯逻辑单测。
   lab 里没有 API Key，所以一次真实调用的闭环还没走通。
