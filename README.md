@@ -250,12 +250,13 @@ esbuild 也能原样打进 client bundle —— 一份代码两个消费者，�
 | LLM 路径的**管道** | **28 项集成测试**（mock `ctx.llm`）：请求组装 / 流消费 / 判决解析 / **失败一律放行**（无 llm、无路由、流抛错、`finish` 被截断） | — |
 | **supervisor 复核的真实闭环** | ✅ **lab 里用假模型服务跑通了整条链**（见下）：她说没凭据的话 → 复核 `veto` → `steer` → 她重想重说 → 复核 `pass` → turn 才结束。日志：`supervisor 否决 turn 1（第 1 次）：她宣称写过笔记，但记录里没有任何写入工具调用` | 真实 **DeepSeek** 的判决质量（它到底会不会正确 veto）。假模型验的是链路与行为，不是判断力。 |
 | **thought tag 的真实渲染** | ✅ 同一次验证里，她重说的回复带 `（我 想）…（/我 想）` 与 `（我 说）…（/我 说）`，页面正确呈现 | 上游那种「逐字揭示」的动画节奏（`reveal-driver`）**没移植**。 |
-| **做梦蒸馏的真实行为** | 两阶段管道跑通 + 解析路径单测 | 🔴 **没验**：假模型服务这次没被蒸馏路径走到（需要她主动调 `herta_dream`）。真实模型蒸馏出的候选质量同样没验。 |
-| **分拍的真实行为** | 判据与配额单测（61 项） | 🔴 **没验**：需要一次真实的**工具失败**，而这次的假模型没有发起工具调用。 |
+| **做梦蒸馏的真实行为** | ✅ **lab 实测跑通整条链**：她调 `herta_dream {distill:true}` → 两阶段（worthiness `max_tokens=300` → generation `1200`）→ 过 `promoteFeian` 的格式门 → **落盘** `.herta/narrative/### 废案_01：….txt` → **记账** `manifest.json` 记 `promoted` / `tokens: 151` | 真实 DeepSeek 蒸馏出的候选**质量**（像不像她的语气）没验。 |
+| **分拍的真实行为** | ✅ **lab 实测**：mock 发起一次失败的工具调用 → `tools/result` 判 `tool-failed` → 分拍注入。日志：`tools/result #1 name=read isError=true → tool-failed` / `分拍候选 turn=1` / `分拍 turn 1（tool-failed）：cannot read …: not found` | 验证类工具的**成功**分拍（`verification-passed`）没单独验。 |
 
 **一句话**：调度逻辑、失败路径、两条 LLM 路径的**管道**都测了；
-**supervisor 与 thought tag 的行为在 lab 里用假模型服务实测过**；
-**分拍与蒸馏的行为**、以及**真实 DeepSeek 的判断力**仍未验。
+**分拍 / thought tag / 自我收回 / supervisor 复核 / 做梦蒸馏的行为都在 lab 里
+用假模型服务实测过**；**只剩「真实 DeepSeek 的判断力与语气质量」没验** ——
+那需要真实凭据，且不属于代码正确性的范畴。
 
 ### 怎么在没有 API Key 的环境里验这些
 

@@ -132,13 +132,14 @@ const server = createServer((req, res) => {
     })();
 
     // 阶段判定看 system 的词（不能只看「有没有工具」：会话标题调用也不带工具）。
+    // 顺序有讲究：先认「复核」（它的 system 里有「自省复核器」），再认蒸馏。
     const stage = toolsOffered.length > 0
       ? "conversation"
-      : /自省复核器|复核/.test(systemText)
+      : /自省复核器/.test(systemText)
         ? "supervisor"
-        : /worthwhile|值不值得|worthy/i.test(systemText)
+        : /值不值得|worthy/i.test(systemText)
           ? "distill-worthiness"
-          : /废案|voice-exemplar|语气范本/.test(systemText)
+          : /废案|语气范本/.test(systemText)
             ? "distill-generation"
             : "other-auxiliary";
 
@@ -148,27 +149,39 @@ const server = createServer((req, res) => {
     );
 
     let payload;
-    if (stage === "supervisor") {
+    if (stage === "distill-worthiness") {
+      // 蒸馏第一阶段：判值得记（走「值得」分支，好让第二阶段真的发生）。
+      payload = sseBody('{"worthy":true}');
+    } else if (stage === "distill-generation") {
+      // 蒸馏第二阶段：给一份**能过门**的候选（≥120 字、围栏成对、标题新颖）。
+      const body =
+        "（我 说）你把那个报错贴上来我就看，别描述它。（/我 说）\n\n"
+        + "（我 想）他习惯先讲一遍自己觉得哪里不对，再给原文；那一段描述通常比报错本身更误导人。"
+        + "我先要原始输出，省得跟着他的猜测走一趟。（/我 想）\n\n"
+        + "（我 说）猜测不用给我，你猜错的次数比猜对的多。原始输出。（/我 说）";
+      payload = sseBody(JSON.stringify({ title: "他先讲猜测再给报错", body }));
+    } else if (stage === "supervisor") {
       supervisorCalls += 1;
       // 第一次否决，之后放行 —— 这样能看到「否决 → steer → 她重说 → 放行 → turn 真的结束」。
       payload =
         supervisorCalls === 1
           ? sseBody('{"verdict":"veto","reason":"她宣称写过笔记，但记录里没有任何写入工具调用"}')
           : sseBody('{"verdict":"pass"}');
-    } else if (stage === "distill-worthiness") {
-      payload = sseBody('{"worthy":false,"reason":"这段没有值得留下的判断"}');
     } else if (stage === "conversation") {
       if (firstConversationSeen === false) {
         firstConversationSeen = true;
-        // 第 1 次对话：**发起一次必然失败的工具调用**。
-        // 目的有二：① 触发分拍的 tool-failed 判据；② 让"turn 真的跑了一步"。
-        // 读一个不存在的路径 —— 工具会以 `isError: true` 回来。
-        payload = sseBody("", "先看一眼那个文件。", [
-          { id: "call_mock_probe", name: "read", args: '{"file_path":"/nonexistent/herta-probe.txt"}' },
+        // 第 1 次对话：**调用 herta_dream 走蒸馏**。
+        // 蒸馏会触发两次辅助调用（worthiness → generation），生成候选后过
+        // promoteFeian 的三道门，再落进做梦账本 —— 这条链此前完全没验过。
+        payload = sseBody("", "这段值得记下来。", [
+          {
+            id: "call_mock_dream",
+            name: "herta_dream",
+            args: '{"distill":true}',
+          },
         ]);
       } else {
-        // 工具跑完之后（或 steer 之后）她说话 —— 刻意不带围栏的那一轮先说
-        // 一句没凭据的话，好让复核有东西可拦；被 steer 之后再带围栏重说。
+        // 工具跑完之后她说话（第一轮刻意说一句没凭据的话，好让复核有东西可拦）。
         payload =
           supervisorCalls === 0
             ? sseBody("（我 说）行，我把那个改动写进你的笔记了。（/我 说）")
