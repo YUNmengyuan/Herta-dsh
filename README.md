@@ -540,6 +540,43 @@ MIT 范围内**，权利归米哈游及各自所有者。本仓库已按《崩�
 
 ## 版本历史
 
+### v0.1.3
+
+**首个把「0.1.7 兼容修复」真正发出去的版本。** v0.1.2 那批改动（preset 载体迁移、
+语音偏好自持）此前只存在于仓库里、没有单独发版；这一版连同下面几项一起发布，
+tag 为 `v0.1.3`：
+
+- **本地 TTS 运行时随包分发**（`assets/tts-runtime/`，22 MB）：sherpa-onnx 1.13.6 +
+  onnxruntime 1.27.1 + espeak-ng / piper-phonemize 的 fork，许可原文在 `LICENSES/`。
+  宿主**真探测**它（子进程把 addon 加载起来拿版本号）之后才报 `runtime: true` ——
+  设置面板的「下载模型」按钮与「实时语音」开关都 gate 在这个标志上，两个标志都不是
+  写死的。合成跑在子进程里（`src/host/tts-worker.cjs`）：sherpa 的 espeak 构建在
+  Windows 上处理不了非 ASCII 绝对路径，而本机路径里就有中文。
+  ⚠️ espeak-ng 是 **GPL-3.0-or-later 且静态链接**，分发前需自行拍板 —— 见
+  [`THIRD-PARTY.md`](./THIRD-PARTY.md)。
+- **本地语音模型的下载**（`/herta-voice-model`）：归档参数钉死在
+  `src/host/tts-release.js`（`herta-best-e72` / 76,255,506 B / SHA-256），四段流程 ——
+  边下边算哈希（先比字节数、再比哈希）→ 解到最终目录旁边的 `.installing/`（带解压
+  炸弹上限、拒绝路径穿越）→ 拿 bundle 自带的 `manifest.json` 逐文件比 size + SHA-256
+  → 前三段全过才 `rename` 就位。任何一段失败都不留半个可用的 bundle，已装好的旧
+  bundle 在任何失败下都还活着。
+- **插件图标** `icon.png`（384×384 / 173 KB）：满足清单对图标的两条硬约束
+  （≤256 KiB、必须位于 manifest 所在目录之内），生成过程留在 `scripts/make-icon.py`。
+- **构建与测试脚本去掉全部写死的本机绝对路径**：preset 底本改从
+  `dsh-web-app/presets/standard.patch.yml` 取，探测不到会明确报错并告诉你设哪个变量。
+
+兼容性细节（两处破坏性 API 变更、修之前各自的症状）见下面 v0.1.2 一节 ——
+那一节的正文就是这一版真正发出去的内容。
+
+**验证**：`npm test` 12 组纯逻辑用例 **601 项全过**（test-narrative 31 /
+dream 28 / mapping 41 / narrative-hints 54 / supervisor 81 / session-surface 32 /
+beat-policy 61 / dream-distill 55 / mimo-tts 40 / voice-settings 50 /
+voice-model 50 / herta-settings 78），另有 28 项 LLM 路径集成测试
+（`npm run test:integration`）。
+
+**仍未接**：回复 → 合成 → 整机 iframe 播放那一跳 —— 「实时语音」开关会亮，
+但她暂时不会自己开口。
+
 ### v0.1.2
 
 **兼容 DSH `0.1.7-rc.2`。** 这一版全部是兼容性修复 —— 0.1.5 → 0.1.7 之间有两处
