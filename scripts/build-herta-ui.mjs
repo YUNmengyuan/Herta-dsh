@@ -21,7 +21,7 @@ const root = resolve(here, "..");
 const outDir = join(root, "lib", "herta-ui");
 const URL_ASSETS_DIR = join(outDir, "assets");
 
-const HERTA_SRC = process.env.HERTA_SRC ?? "E:\\deepseek工作区\\Herta-src";
+const HERTA_SRC = process.env.HERTA_SRC ?? "E:\\deepseek工作区\\HerTa\\Herta-src";
 const HERTA_RENDERER = join(HERTA_SRC, "packages", "gui", "src", "renderer");
 /** 官网那套 shim 可以直接借用 —— 它们就是为「脱离 Electron 跑渲染层」写的。 */
 const WEBSITE_SRC = join(HERTA_SRC, "website", "src");

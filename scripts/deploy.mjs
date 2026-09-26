@@ -15,15 +15,15 @@
  * `dsh plugin --profile <name> add dsh-herta`。
  */
 import { execFileSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
 
-/** 默认目标是工作区里的隔离实验 profile，绝不碰桌面应用的 web profile。 */
-const DEFAULT_PROFILE_DIR = "E:\\deepseek工作区\\herta-lab\\.dsh\\profiles\\herta-lab";
+/** 默认目标是工作区里的隔离实验 profile，绝不碰桌面应用真正在用的那个 profile。 */
+const DEFAULT_PROFILE_DIR = resolve(root, "..", "herta-lab", ".dsh", "profiles", "herta-lab");
 const profileDir = process.env.DSH_PROFILE_DIR ?? DEFAULT_PROFILE_DIR;
 const target = join(profileDir, "node_modules", "dsh-herta");
 
@@ -36,27 +36,29 @@ execFileSync(process.execPath, [join(here, "build-herta-ui.mjs")], { stdio: "inh
 if (!existsSync(profileDir)) {
   throw new Error(`目标 profile 不存在：${profileDir}\n先跑一次 dsh --profile herta-lab --from-default-profile web --dump-config`);
 }
+// **先整棵删掉再拷**，不用 cpSync 的「合并覆盖」语义：Windows 上合并覆盖会被
+// 上一位持有者（尤其是刚被杀掉的 dsh 实例）留下的文件句柄挡成 EPERM/EPIPE，
+// 而且合并会留下上一版有、这一版没有的陈旧模块。先删是确定性的。
+rmSync(target, { recursive: true, force: true });
 mkdirSync(join(target, "lib"), { recursive: true });
 
 // lib/ 整棵镜像过去 —— 里面不只有 host 半侧的各模块，还有 lib/herta-ui/ 整机页面
 // （html/js/css/开场段/worker）。写死文件名或只拷一层都会漏。
 cpSync(join(root, "lib"), join(target, "lib"), { recursive: true });
-for (const rel of ["cordis.patch.yml", "package.json"]) {
+// icon.png 必须一起过去：package.json 里 `"icon": "./icon.png"` 指向它，
+// 少了它清单读取会记一条 error（图标位置变成诊断信息）。
+for (const rel of ["cordis.patch.yml", "package.json", "icon.png"]) {
   copyFileSync(join(root, rel), join(target, rel));
 }
 // assets/ 也要镜像 —— 80 条语音（2.5 MB）在 assets/voice/ 下，host 半侧按
 // `lib/../assets/voice` 找它。少了它语音整档静默失效（不会报错，只是没声）。
 cpSync(join(root, "assets"), join(target, "assets"), { recursive: true });
+// preset 补丁层也要镜像 —— package.json 的 dsh.bundle.patch 数组指向它，
+// 少了它 profile 起不来（loader 找不到 patch 文件）。
+cpSync(join(root, "preset"), join(target, "preset"), { recursive: true });
 console.log(`插件已部署到 ${target}`);
 
-// 3) 部署 agent preset。
-// preset 根是 `<DSH_HOME>/.agent-presets`（dsh-agent-presets 的 includeUserRoot），
-// DSH_HOME 就是 profileDir 往上三层（profiles/<name> → profiles → .dsh）。
-const dshHome = dirname(dirname(profileDir));
-const presetTarget = join(dshHome, ".agent-presets", "herta");
-mkdirSync(presetTarget, { recursive: true });
-for (const rel of ["preset.yml", "agent.cordis.yml"]) {
-  copyFileSync(join(root, "preset", rel), join(presetTarget, rel));
-}
-console.log(`preset 已部署到 ${presetTarget}`);
-console.log("（改了 client 半侧或 preset 后需要重启 dsh web 才会生效）");
+// 3) 轻量核验：preset 行确实出现在合成结果里。
+// 0.1.7 起 preset 不再是 `$DSH_HOME/.agent-presets/<name>/` 目录，所以这里
+// 不再往 home 里拷任何东西 —— 它随包一起，作为第二条 bundle patch 生效。
+console.log("（preset 随包生效，无需往 $DSH_HOME 拷贝；改了 client 半侧或 preset 后需要重启 dsh web）");

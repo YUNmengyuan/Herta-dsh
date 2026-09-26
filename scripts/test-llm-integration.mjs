@@ -19,7 +19,7 @@
  * 所以要靠 resolve hook 指向本机 DSH 运行时。运行方式：
  *
  * ```powershell
- * $hook = ([System.Uri]::new('E:\deepseek工作区\dsh-herta\scripts\test-resolve-hook.mjs')).AbsoluteUri
+ * $hook = ([System.Uri]::new('E:\path\to\dsh-herta\scripts\test-resolve-hook.mjs')).AbsoluteUri
  * node --import $hook scripts\test-llm-integration.mjs
  * ```
  *
@@ -30,9 +30,11 @@
  * —— 那层包装属于 `expandAssistantStream`，见 `dsh-llm/lib/index.js`）。
  * 所以 mock 必须 yield 裸 `StreamChunk`。
  */
-import { pathToFileURL } from "node:url";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const ROOT = "E:/deepseek工作区/dsh-herta";
+/** 仓库根：由本文件位置推出，**不写死绝对路径**（换机器/换目录都能跑）。 */
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 let pass = 0;
 let fail = 0;

@@ -16,6 +16,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,20 +31,28 @@ const value = (name, dflt) => {
   return i >= 0 && argv[i + 1] !== undefined ? argv[i + 1] : dflt;
 };
 
-/** 桌面应用的 DSH home（不是 PATH 上那个 0.1.2 安装）。 */
-const HOME = value("--home", "E:\\DeepSeek H\\data\\home\\.dsh");
-const PROFILE = value("--profile", "web");
-/** 必须用桌面应用实际运行的那个 bin（0.1.5），PATH 上是 0.1.2。 */
-const DSH_BIN = value(
-  "--dsh-bin",
-  "E:\\DeepSeek H\\data\\runtime\\dsh\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js",
-);
+/**
+ * 目标 DSH home。0.1.7 起桌面应用用 `%USERPROFILE%\.dsh`（可用 --home 覆盖）。
+ */
+const HOME = value("--home", process.env.DSH_HOME ?? join(homedir(), ".dsh"));
+const PROFILE = value("--profile", "desktop");
+/**
+ * 目标 profile 实际在用的那个 dsh bin。
+ *
+ * ⚠️ **0.1.7 起桌面应用的运行时打包在 `resources/app.asar` 里** —— 那是 Electron
+ * 的归档格式，普通 Node 读不到，所以本脚本**无法驱动桌面应用自带的那份运行时**。
+ * 两种用法：
+ *   · 桌面应用：用应用内置的插件管理器安装（模型侧的 `plugin_manager` 工具，
+ *     `install_bundle` → `file:<repo>`），再关窗重开
+ *   · 独立 DSH 安装（npm / 便携版）：`--dsh-bin <…/@deepseek-ai/dsh/lib/bin.js>`
+ *     或 `$env:DSH_BIN`，本脚本全程可用
+ */
+const DSH_BIN = value("--dsh-bin", process.env.DSH_BIN ?? "");
 const NODE = process.execPath;
 const DRY = flag("--dry-run");
 const ROLLBACK = flag("--rollback");
 
 const PROFILE_DIR = join(HOME, "profiles", PROFILE);
-const PRESET_DIR = join(HOME, ".agent-presets", "herta");
 const BACKUP_ROOT = join(root, "install-backups");
 const PACKAGE_NAME = "dsh-herta";
 
@@ -110,21 +119,24 @@ if (ROLLBACK) {
       say(`  已还原 ${rel}`);
     }
   }
-  if (existsSync(join(from, "agent-presets-herta"))) {
-    rmSync(PRESET_DIR, { recursive: true, force: true });
-    cpSync(join(from, "agent-presets-herta"), PRESET_DIR, { recursive: true });
-    say("  已还原 preset");
-  } else if (existsSync(PRESET_DIR)) {
-    // 备份时 preset 不存在 → 回滚就该把它删掉
-    rmSync(PRESET_DIR, { recursive: true, force: true });
-    say("  已删除 preset（备份时它不存在）");
-  }
+  // 0.1.7 起 preset 是包自带的第二条 bundle patch，跟着 package.json + bundles
+  // 一起回滚，这里不再有单独的 `.agent-presets` 需要清理。
   say("\n回滚完成。**仍需关窗重开桌面应用才生效。**");
   process.exit(0);
 }
 
 // ── 0. 前置检查 ─────────────────────────────────────────────────────────────
 step("0", "前置检查");
+if (DSH_BIN === "") {
+  throw new Error(
+    [
+      "没有指定 dsh bin —— 本脚本需要一个**普通 Node 能启动**的 DSH 安装。",
+      "  · 桌面应用：运行时在 resources/app.asar 里（普通 Node 读不到），",
+      "    请改用应用内置的插件管理器安装（模型侧 plugin_manager 工具的 install_bundle）。",
+      "  · 独立 DSH 安装：--dsh-bin <…/node_modules/@deepseek-ai/dsh/lib/bin.js> 或 $env:DSH_BIN。",
+    ].join("\n"),
+  );
+}
 for (const [label, p] of [
   ["DSH bin", DSH_BIN],
   ["profile 目录", PROFILE_DIR],
@@ -132,7 +144,9 @@ for (const [label, p] of [
   ["插件包", join(root, "lib", "client.js")],
   ["整机页面", join(root, "lib", "herta-ui", "index.html")],
   ["语音资产", join(root, "assets", "voice")],
-  ["preset", join(root, "preset", "agent.cordis.yml")],
+  ["TTS 运行时", join(root, "assets", "tts-runtime", "sherpa-onnx-node", "sherpa-onnx.js")],
+  ["preset 补丁层", join(root, "preset", "herta.patch.yml")],
+  ["插件图标", join(root, "icon.png")],
 ]) {
   if (!existsSync(p)) throw new Error(`缺 ${label}：${p}`);
   say(`  ✅ ${label}`);
@@ -149,7 +163,7 @@ if ((before.dsh?.profile?.bundles ?? []).includes(PACKAGE_NAME)) {
 
 if (DRY) {
   say("\n（--dry-run：到此为止，没有改动任何文件）");
-  say("真装会做：备份 → dsh plugin add → 拷 preset → --dump-config 自校验");
+  say("真装会做：备份 → dsh plugin add（含 preset bundle patch）→ --dump-config 自校验");
   process.exit(0);
 }
 
@@ -162,7 +176,6 @@ for (const rel of ["package.json", "cordis.patch.yml"]) {
   const src = join(PROFILE_DIR, rel);
   if (existsSync(src)) cpSync(src, join(backupDir, rel));
 }
-if (existsSync(PRESET_DIR)) cpSync(PRESET_DIR, join(backupDir, "agent-presets-herta"), { recursive: true });
 // 记下这份备份属于哪个 home / profile —— 回滚时按它过滤，避免还错对象。
 writeFileSync(
   join(backupDir, "TARGET.json"),
@@ -183,7 +196,10 @@ function mirrorPackage() {
   mkdirSync(target, { recursive: true });
   cpSync(join(root, "lib"), join(target, "lib"), { recursive: true });
   cpSync(join(root, "assets"), join(target, "assets"), { recursive: true });
-  for (const rel of ["cordis.patch.yml", "package.json"]) {
+  // preset 补丁层必须一起进 profile —— package.json 的 dsh.bundle.patch 数组
+  // 指向 ./preset/herta.patch.yml，少了它 profile 起不来（loader 找不到 patch 文件）。
+  cpSync(join(root, "preset"), join(target, "preset"), { recursive: true });
+  for (const rel of ["cordis.patch.yml", "package.json", "icon.png"]) {
     cpSync(join(root, rel), join(target, rel));
   }
   return target;
@@ -230,13 +246,16 @@ if (!bundles.includes(PACKAGE_NAME)) {
 }
 say(`  ✅ bundles 现在：${bundles.join(", ")}`);
 
-// ── 3. 拷 preset ────────────────────────────────────────────────────────────
-step("3", "拷 preset");
-mkdirSync(PRESET_DIR, { recursive: true });
-for (const rel of ["preset.yml", "agent.cordis.yml"]) {
-  cpSync(join(root, "preset", rel), join(PRESET_DIR, rel));
+// ── 3. preset ───────────────────────────────────────────────────────────────
+// 0.1.7 起 preset 不再是 `$DSH_HOME/.agent-presets/<name>/` 目录，而是**包自带的
+// 第二条 bundle patch**（`preset/herta.patch.yml`，见 package.json 的
+// dsh.bundle.patch 数组）。它已随上面的 mirrorPackage 进 profile，这里只核验。
+step("3", "核验 preset 补丁层");
+const presetInProfile = join(PROFILE_DIR, "node_modules", PACKAGE_NAME, "preset", "herta.patch.yml");
+if (!existsSync(presetInProfile)) {
+  throw new Error(`preset 补丁层没进 profile：${presetInProfile}`);
 }
-say(`  已写入 ${PRESET_DIR}`);
+say(`  ✅ ${presetInProfile}`);
 
 // ── 4. 自校验 ───────────────────────────────────────────────────────────────
 step("4", "自校验（--dump-config）");
@@ -245,6 +264,11 @@ const hertaRows = (dump.match(/^- id: herta$/gm) ?? []).length;
 say(`  ✅ dump-config exit 0`);
 say(`  herta 行数量：${hertaRows}${hertaRows === 1 ? "" : "  ❌ 应当是 1"}`);
 if (hertaRows !== 1) throw new Error("herta 行不是恰好一条 —— 疑似重复条目，回滚：node scripts/install-web.mjs --rollback");
+// preset 补丁层必须真的进了合成结果（它是「黑塔」这个 preset 的唯一来源）
+if (!dump.includes("preset-herta") || !dump.includes("plane: preset")) {
+  throw new Error("配置里没有 preset-herta / plane: preset —— bundle patch 数组没生效，回滚：node scripts/install-web.mjs --rollback");
+}
+say("  ✅ preset-herta 行在配置里（她的 preset 已挂上）");
 
 // 之前装的插件必须还在（我们只是追加，不该动别人）
 for (const other of ["dsh-github-workbench"]) {

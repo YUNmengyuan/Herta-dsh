@@ -32,6 +32,30 @@
 
 ---
 
+## ⚙️ 兼容性（先看这一节）
+
+**面向 DSH `0.1.7-rc.2`。** 本版本修的正是 0.1.5 → 0.1.7 之间两处**破坏性 API 变更**
+（都是实测出来的，不是猜的）：
+
+| 变了什么 | 0.1.5 时的写法 | 0.1.7 的现状 | 本仓库怎么办 |
+|---|---|---|---|
+| **agent preset 的载体** | `$DSH_HOME/.agent-presets/<name>/agent.cordis.yml`（一整棵 cordis 树）+ `preset.yml` | 该目录机制**整个移除**（运行时里已无任何代码引用 `.agent-presets`）；preset 变成一条 `@deepseek-ai/dsh-agent-preset` loader 行，官方写成 `dsh-web-app/presets/*.patch.yml` | 生成 `preset/herta.patch.yml`，作为**第二条 bundle patch** 随插件一起装（`dsh.bundle.patch` 现在可以是数组） |
+| **用户偏好的存放（设置域）** | 宿主 `ctx.settings.register(ns, schema)` + 客户端 `settingsScope.bind({namespace})` | 两者**一起消失**：`SettingsProvider`/`SettingsScope`/`SettingsRegisterOptions` 不再导出，客户端 `settingsScope` 服务不存在，事件 `settings/updated`、`settings/document-updated` 也没了；换成基于插件 Config 的 `SettingsForms`/`configForms`，**没有第三方命名空间入口** | 语音偏好改为**自持**：`$DSH_HOME/dsh-herta-voice.json` + 白名单端点 `GET/PUT /herta-settings`（理由与代价见 `src/host/voice-settings.js` 文件头） |
+
+其余用到的 API 在 0.1.7 上**没变**，实测可用：`ctx.systemPrompt.section({name,order,text})`、
+`ctx.tools.register(defineTool(...))`、`ctx.inject([...])`、`ctx.slots.inject/register`、
+`ctx.uiConversation.binding(id).target('chat')`、
+`ctx.on('agent/turn-stopping' | 'agent/error' | 'tools/result')`、
+`@deepseek-ai/dsh-llm` 的 `BlockAssembler` / `createUserMessage`、
+`webServer.register({ kind: 'prefix' })`。
+
+> 升级 DSH 后先跑这三条：
+> 1. `dsh --profile <p> --dump-config` → 应有 `- id: preset-herta`，且其 `config.plugins` 末尾有 `plane: preset`
+> 2. 启动日志 → 应有 `plane=host`、`plane=preset`、`叙述层依赖就绪`、`设置端点已挂`，**不应**出现 `settings.register is not a function`
+> 3. `npm test` → 531 项；`npm run test:integration` → 28 项
+
+---
+
 ## 📌 素材权利声明（clone 后先看这一节）
 
 本仓库**包含**《崩坏：星穹铁道》的角色素材，**这些素材的权利不属于本仓库作者**：
@@ -43,7 +67,8 @@
 | 素材 | 干什么用的 |
 |---|---|
 | `assets/voice/`（80 条 `.opus`，2.55 MB） | C 层语音：开场白 / 语气词 / 自我收回 / 彩蛋 |
-| `preset/agent.cordis.yml`（46 KB） | A 层人格正本（内含 `HertaBio.txt` 逐字，含引用台词） |
+| `preset/herta.patch.yml`（42 KB） | A 层人格正本（内含 `HertaBio.txt` 逐字，含引用台词） |
+| `icon.png`（384×384，173 KB） | 插件在 DSH 插件管理页里的图标（取自 Herta 上游桌面应用，缩放重编码以符合 DSH 的 ≤256 KiB 约束） |
 
 上述声明依据米哈游官方
 **《崩坏：星穹铁道》同人衍生作品创作指引 V2.0**（2024-04-18 生效）第三条放置。
@@ -59,14 +84,43 @@ clone 后**开箱即用，无需自备素材**。
 
 ## 装
 
-```powershell
-node scripts\install-web.mjs --dry-run   # 只读：先看它会做什么
-node scripts\install-web.mjs             # 装进桌面应用的 web profile
+### 桌面应用（0.1.7-rc.2）
+
+桌面应用的 DSH 运行时打包在 `resources/app.asar` 里 —— 那是 Electron 的归档格式，
+**普通 Node 读不到**，所以 `install-web.mjs` 驱动不了它。走应用内置的插件管理器：
+
+```
+plugin_manager  install_bundle   file:<本仓库绝对路径>
 # 然后关掉桌面应用窗口，重新打开
 ```
 
-必须关窗重开：`patchReload: live` 只热重载 patch 文件，而 `dsh.profile.bundles`
-的变更是**启动期合成**；桌面应用也没有子进程守护，直接杀掉 `dsh web` 不会自动拉起。
+或者在有独立 DSH 安装（不是 asar 版）时用命令行：
+
+```powershell
+dsh plugin --profile desktop add file:<本仓库绝对路径>
+```
+
+### 独立 DSH 安装 / lab（脚本可全程驱动）
+
+```powershell
+$env:DSH_BIN   = "<…>\node_modules\@deepseek-ai\dsh\lib\bin.js"   # 必须能被普通 Node 启动
+$env:DSH_HOME  = "<目标 home>"                                    # 可选
+node scripts\install-web.mjs --dry-run    # 只读：先看它会做什么
+node scripts\install-web.mjs --profile desktop
+# 然后关掉桌面应用窗口，重新打开
+```
+
+脚本做四件事：**前置检查 → 备份 → 装（`dsh plugin add`，失败则走确定性兜底）
+→ `--dump-config` 自校验**（herta 行必须恰好一条、`preset-herta` 必须进合成结果、
+其他已装插件不能消失）。回滚：`--rollback`。
+
+**preset 不再需要单独安装。** 0.1.7 起它是本包自带的第二条 bundle patch
+（`preset/herta.patch.yml`，见 `package.json` 的 `dsh.bundle.patch` 数组），
+`plugin add` 会一并生效 —— 所以这个脚本里没有「拷 preset 到 `$DSH_HOME`」那一步了，
+也**不再有「preset 属于整个 home」那个副作用**。
+
+必须关窗重开：`dsh.profile.bundles` 的变更是**启动期合成**；桌面应用没有子进程守护，
+直接杀掉 `dsh web` 不会自动拉起。
 
 出问题回滚：`node scripts\install-web.mjs --rollback`（之后同样关窗重开）。
 
@@ -75,8 +129,8 @@ node scripts\install-web.mjs             # 装进桌面应用的 web profile
 该路径已实测：还原后 `bundles` 与 `dependencies` 回到安装前、找不到匹配备份时
 明确报错而不是乱还原。
 
-⚠️ 注意 **agent preset 属于整个 DSH home，不属于单个 profile** —— 回滚会连带
-处理它，因此会影响同一 home 下所有 profile。
+⚠️ 桌面应用内置的插件管理器**没有回滚**。要改它真正在用的那个 profile 之前，
+先手工备份 `profiles/<name>/package.json` 与 `cordis.patch.yml`。
 
 ---
 
@@ -86,15 +140,18 @@ node scripts\install-web.mjs             # 装进桌面应用的 web profile
 
 | | profile bundle 行（宿主面） | preset 行（agent 面） |
 |---|---|---|
-| 干什么 | 让 client 半侧进浏览器启动图 + 挂两条静态路由 | 注册她的提示词段与五个工具 |
+| 干什么 | 让 client 半侧进浏览器启动图 + 挂四条路由（语音 / 偏好 / 模型 / 整机） | 注册她的提示词段与五个工具 |
 | 为什么不换 | `dsh-client-modules` 只扫 `loader.entries()`，preset 子树不在其中 | 放宿主面会把工具泄漏给**所有**会话 |
 | 怎么区分 | 行上没有 `config` | 行上带 `config: { plane: preset }` |
+| 住在哪 | 包自带的 `cordis.patch.yml` | 包自带的 `preset/herta.patch.yml`（0.1.7 起 preset 就是一条普通 loader 行；旧版的 `$DSH_HOME/.agent-presets/` 目录机制已被 DSH 移除） |
 
 两个实例的 `apply` 都会跑（模块只求值一次，fiber 是两个），所以**模块级可变状态
 必须与平面无关或按 key 索引** —— 缓存按 cwd 索引就是这个原因。
 
-preset 是**懒挂载**的：启动日志里只有 `plane=host` 是正常的，要等第一个真正跑起来的、
-属于该 preset 的会话才会出现 `plane=preset`。
+preset 行现在**启动期就挂**（0.1.7 实测：冷启动日志里 `plane=host` 与 `plane=preset`
+一起出现）—— 旧版 0.1.5 是懒挂载，要等第一个属于该 preset 的会话才挂。
+两种都正常，但**别拿「没看到 plane=preset」当插件没装上的证据**，以 `--dump-config`
+为准。
 
 ### 两条界面路线
 
@@ -160,13 +217,77 @@ iframe 是**独立文档**，所以她的原版样式**原样使用**（`:root` 
 > 不像上游能在后端事件发生当拍插话。所以分拍是「事件后一个 step 补评」——
 > 效果等价，时机晚一拍。
 
-### 两条静态路由
+### 四条路由
 
-都是**白名单**：启动时扫出文件索引，请求路径必须命中，否则 404。不存在路径穿越的
-可能，也就不需要 `../` 过滤这类容易写错的代码。
+前两条是**白名单静态资源**：启动时扫出文件索引，请求路径必须命中，否则 404。
+不存在路径穿越的可能，也就不需要 `../` 过滤这类容易写错的代码。
 
 - `/herta-voice` —— 80 条语音 + 代码生成的 `index.json`
 - `/herta-ui` —— 整机页面（html / js / css / 开场段 / pdf worker）
+
+后两条不是静态资源，是宿主自持的两个读写端点：
+
+- `/herta-settings` —— 语音偏好。`GET` 读、`PUT` 写；body 上限 8 KB，只认
+  `engine`（`local|minimax|mimo`）与 `realtimeVoice`（布尔），非法字段被丢弃、
+  非法 JSON 回 400、其他方法回 405；落盘走「临时文件 + rename」，读方看不到半截 JSON。
+  （0.1.7 起 DSH 设置域不再接受第三方命名空间注册，所以自持 —— 见
+  `src/host/voice-settings.js` 文件头。）
+- `/herta-voice-model` —— 本地语音模型（离线 TTS）的下载。
+  `GET` 状态、`POST {"action":"download"|"cancel"|"remove"}` **点火即返回**，
+  进度靠轮询 `GET` 拿。状态码与 `phase` 都用上游那套
+  （`absent` / `downloading` / `ready` / `failed`，失败带 `error` 键）。
+  详见下一节。
+
+---
+
+## 本地语音模型（离线 TTS 的模型那半）
+
+设置面板里的「下载模型」现在是真的：宿主会去上游发布的地址取那一个归档。
+
+**固定参数从上游扒来，钉在代码里**（`src/host/tts-release.js`）——不是运行时问服务端：
+
+| 项 | 值 | 出处 |
+|---|---|---|
+| 归档 | `herta-best-e72.tar.gz` | `Herta-src/…/tts/tts-release.ts` |
+| 地址 | `https://github.com/PersonaCLI/Herta/releases/download/voice-herta-best-e72/herta-best-e72.tar.gz` | 同上 |
+| 体积 | 76,255,506 B（72.7 MiB） | 同上 |
+| SHA-256 | `ce993a6fab911e9a86328facc952120c21de54303652f648e96e9d14ee4f172e` | 同上 |
+| 解包后 | 115,897,197 B（110.5 MiB） | 同上 |
+| 装到哪 | `$DSH_HOME/tts/herta-best-e72` | 上游是 `<userData>/tts`，这里跟 DSH 的 home |
+
+上游那段注释说明了为什么要钉：*「A retrain is a new bundle id …, a new archive, new pins,
+and therefore an app release: the download never trusts the host, only this file.」*
+本插件**不重打包也不转发**这个归档，只是按上游发布的地址去取。
+
+**四段，任何一段失败都不会留下半个可用的 bundle**（`src/host/voice-model.js`）：
+
+1. 边下边算 SHA-256；先比**字节数**、再比**哈希**，任一不符即中止
+2. 解到最终目录**旁边**的 `.installing/`，带解压炸弹上限（只看普通文件与目录，拒绝路径穿越）
+3. 拿 bundle 自带的 `manifest.json` **逐个文件比 size + SHA-256**，还要比 `release` 是不是这一版期望的
+4. 只有前三段全过，才 `rename` 就位 —— 读到的要么是旧的完整版，要么是新的完整版
+
+已经装好的旧 bundle 在任何失败下都活着（只在第 4 步被替换）。
+
+> ✅ **运行时已随包分发**（`assets/tts-runtime/`，22 MB，sherpa-onnx 1.13.6 +
+> onnxruntime 1.27.1）。宿主会**真探测**它（拉子进程把 addon 加载起来拿版本号，
+> 结果进程内缓存），探测通过才报 `runtime: true` —— 设置面板把「下载模型」按钮
+> 与「实时语音」开关都 gate 在这个标志上，写死 true 就是仓库别处修过的假绿。
+>
+> 合成本身也实测过：`scripts/test-tts-runtime.mjs` 用真实模型合成
+> 「你好。我是黑塔，天才俱乐部第八十三号。」→ **24 kHz / 5.08 s / 非静音**
+> （峰值 25209、平均 2319），4.3 s 出结果。合成跑在**子进程**里
+> （`src/host/tts-worker.cjs`）：sherpa 的 espeak 构建在 Windows 上处理不了
+> 非 ASCII 绝对路径，而本机路径里就有中文 —— worker `chdir` 到模型根再传相对
+> 路径，与上游同一招；顺带也避免了同步阻塞宿主、原生件崩溃拖死宿主。
+>
+> ⚠️ **还差最后一段**：把她的回复**自动**念出来（触发 + 播放）还没接。
+> 也就是说 `runtime` 与 `bundle` 都是真的、引擎确实能合成，但「实时语音」开关
+> 打开后她暂时不会自己开口。要接的是：回复文本 → 合成 → 推给 iframe 播放。
+
+> ⚠️ **本机 TLS 提示。** 这台机器对 GitHub 有中间拦截，普通 Node 的 `fetch` 会直接
+> `fetch failed`，加 `--use-system-ca` 才通。DSH 宿主是 Electron 拉起的**普通 Node
+> 子进程**，所以要给宿主加 `NODE_OPTIONS=--use-system-ca` 再启动；下载失败时插件
+> 会把这条提示写进日志（而不是只回一个 `network`）。
 
 ---
 
@@ -198,21 +319,52 @@ iframe 是**独立文档**，所以她的原版样式**原样使用**（`:root` 
 ## 开发
 
 ```powershell
+# 构建脚本需要一份「解开目录」的 DSH 安装（桌面应用的包在 app.asar 里，读不到）
+$env:DSH_PACKAGES = "<…>\node_modules\@deepseek-ai"
+
 node scripts\build.mjs           # client 半侧（esbuild + 模块加载器包装）
-node scripts\build-preset.mjs    # agent preset（以随附 standard 为底，只换 persona 行）
+node scripts\build-preset.mjs    # agent preset 补丁层（以随附 standard 为底，只换 persona 行）
 node scripts\build-herta-ui.mjs  # 整机页面
 node scripts\deploy.mjs          # 三样都构建 + 镜像进 lab profile
-node scripts\test-narrative.mjs      # 货架逻辑（31 项）
-node scripts\test-dream.mjs          # 做梦逻辑（28 项）
-node scripts\test-mapping.mjs        # DSH↔Herta 映射（31 项）
+
+node scripts\test-narrative.mjs        # 货架逻辑（31 项）
+node scripts\test-dream.mjs            # 做梦逻辑（28 项）
+node scripts\test-mapping.mjs          # DSH↔Herta 映射（41 项）
 node scripts\test-narrative-hints.mjs  # 叙述语法与提示词资产（54 项）
-node scripts\test-supervisor.mjs     # 复核：判决解析 / 路由 / 否决配额（81 项）
+node scripts\test-supervisor.mjs       # 复核：判决解析 / 路由 / 否决配额（81 项）
 node scripts\test-session-surface.mjs  # 会话表面提取：候选回话 / 摘要 / turn（32 项）
-node scripts\test-beat-policy.mjs    # 分拍判据与配额（61 项）
-node scripts\test-dream-distill.mjs  # 蒸馏提示构造与解析（55 项）
+node scripts\test-beat-policy.mjs      # 分拍判据与配额（61 项）
+node scripts\test-dream-distill.mjs    # 蒸馏提示构造与解析（55 项）
+node scripts\test-mimo-tts.mjs         # MiMo 合成请求构造（40 项）
+node scripts\test-voice-settings.mjs   # 语音偏好的清洗 / 合并（58 项）
+node scripts\test-voice-model.mjs      # 模型下载：tar 解析 / 校验 / 状态机（50 项）
 ```
 
-`npm test` 跑前八组纯逻辑测试（共 **314 项**）；另有 LLM 路径的集成测试
+**可选：用真实数据再跑一遍管线**（需要本机已经有一份真的 bundle —— Herta 桌面应用
+在「设置 → 语音」里下过模型的话就有）：
+
+```powershell
+$env:HERTA_TTS_REAL_BUNDLE = "$env:APPDATA\Herta\tts\herta-best-e72"
+node scripts\test-voice-model-real.mjs
+```
+
+它把那份真实的 **367 个文件 / 116 MB** 自己打成 tar.gz、起一个本机 HTTP 服务、
+再走完整的下载 → 校验 → 解包 → 再校验 → 换入，最后**逐文件对账**。
+小归档验不了的东西（真实 `manifest.json` 的 366 个真 SHA-256、真实的
+`espeak-ng-data` 目录树、真实长路径）都在这里过一遍。默认不跑，因为它依赖机器上
+已有的那份模型。
+
+**可选：验证本地 TTS 运行时真能出声**（同样需要一份真实模型）：
+
+```powershell
+$env:HERTA_TTS_MODEL_ROOT = "$env:APPDATA\Herta\tts\herta-best-e72"
+node scripts\test-tts-runtime.mjs
+```
+
+22 项：运行时能被加载（拿到 sherpa-onnx 版本号）→ 真合成出 **24 kHz 非静音**音频
+→ WAV 头/采样数/字节数自洽 → 波形有起伏（不是一条平线）。
+
+`npm test` 跑十一组纯逻辑测试（共 **531 项**）；另有 LLM 路径的集成测试
 （28 项，用 mock 的 `ctx.llm` 把管道整条跑通）：
 
 ```powershell
@@ -232,8 +384,17 @@ esbuild 也能原样打进 client bundle —— 一份代码两个消费者，�
 
 改动落在 `dsh.profile.bundles` 或 preset 上的，**必须重启实例**才生效。
 
-环境变量：`HERTA_SRC`（Herta 源码树，默认 `E:\deepseek工作区\Herta-src`）、
-`DSH_PRESETS`（随附 preset 目录）、`DSH_PROFILE_DIR`（`deploy.mjs` 的目标）。
+环境变量：
+
+| 变量 | 给谁用 | 含义 |
+|---|---|---|
+| `HERTA_SRC` | `build*.mjs`、`test-narrative.mjs` | Herta 源码树（身份正本与渲染层从这里取） |
+| `DSH_PACKAGES` | `build-preset.mjs` | DSH 安装里的 `…/node_modules/@deepseek-ai`（preset 底本） |
+| `DSH_MODULES` | `test-resolve-hook.mjs` | DSH 安装里的 `…/node_modules`（借 `@deepseek-ai/*`） |
+| `DSH_PROFILE_DIR` | `deploy.mjs`、`test-dream.mjs` | 目标 lab profile |
+| `DSH_BIN` / `DSH_HOME` | `install-web.mjs` | 可被普通 Node 启动的 dsh bin、目标 home |
+| `NODE_OPTIONS` | DSH 宿主进程 | 本机对 GitHub 有 TLS 拦截时需要 `--use-system-ca`，否则模型下载会失败 |
+| `HERTA_TTS_ARCHIVE_URL` | `tts-release.js` | 开发用：覆盖模型归档地址（**哈希 pin 照旧生效**，内容不能换） |
 
 ---
 
@@ -283,9 +444,13 @@ esbuild 也能原样打进 client bundle —— 一份代码两个消费者，�
 `verdict` 可直接读作结论。**只放阶段名、计数、时间与 pid，不放任何对话内容。**
 
 ```powershell
-Get-Content 'E:\DeepSeek H\data\home\.dsh\dsh-herta-narrative.json'   # 正式环境
-Get-Content 'E:\deepseek工作区\herta-lab\.dsh\dsh-herta-narrative.json' # lab
+# 正式环境：桌面应用的 DSH_HOME 是 %USERPROFILE%\.dsh
+Get-Content "$env:USERPROFILE\.dsh\dsh-herta-narrative.json"
+# lab：$env:DSH_HOME 指到哪就在哪
+Get-Content "$env:DSH_HOME\dsh-herta-narrative.json"
 ```
+
+同一目录下还有语音偏好 `dsh-herta-voice.json`（0.1.7 起自持，见上文「兼容性」）。
 
 > **`turnStop` 那一条是「它活着」最硬的信号** —— 比「有没有人 veto」硬得多：
 > 放行不留痕迹，而钩子被触发过就说明链路接上了。
@@ -315,10 +480,16 @@ node scripts\mock-llm-server.mjs --port 8791
 
 - **五个工具从未在真实会话里被调用过** —— 只验证到「进了工具表」与纯逻辑单测。
   lab 里没有 API Key，所以一次真实调用的闭环还没走通。
-- **`scripts/` 里有硬编码的本机绝对路径**（`E:\DeepSeek H\...`、`E:\deepseek工作区\...`），
-  作者本机可直接跑，**别人 clone 后需要改这几处默认值**（或在 `HERTA_SRC` 等
-  环境变量里覆盖）。具体位置：`install-web.mjs`（`HOME` / `DSH_BIN`）、`build.mjs`
-  与 `build-herta-ui.mjs`（`HERTA_SRC`）、`deploy.mjs` 与 `build-preset.mjs`。
+- **构建脚本需要指向一份 DSH 安装**，因为 preset 的底本是官方随附的那份。
+  0.1.7 起：`build-preset.mjs` 读 `dsh-web-app/presets/standard.patch.yml`，
+  通过 `DSH_PACKAGES`（指到 `…/node_modules/@deepseek-ai`）定位；集成测试与
+  `test-dream.mjs` 通过 `DSH_MODULES`（指到 `…/node_modules`）借 `@deepseek-ai/*`。
+  **两者都不再写死本机绝对路径**，探测不到会明确报错并告诉你设哪个变量。
+  `HERTA_SRC`（Herta 源码树）仍有一个本机默认值，可用环境变量覆盖。
+  ⚠️ 桌面应用的包在 `app.asar` 里，构建脚本读不到 —— 构建请指向一份
+  **解开目录**的 DSH 安装（npm 安装或便携版）。
+- **语音偏好不再出现在 DSH 的设置界面里**。0.1.7 移除了第三方注册设置命名空间的
+  入口，所以它只在她自己的设置面板里可改（代价见上文「兼容性」一节）。
 - **整机页的 `submitText` 未实现** —— 她那套输入框既然已隐藏，这条路径日常碰不到；
   但若要恢复输入框，必须同时把 bridge 的 `submitText` 补上，否则还是发不出消息。
 - **C 层客户端消费 cue 的那一半未端到端验证** —— cue 的**抽取**已有单测覆盖
@@ -326,8 +497,13 @@ node scripts\mock-llm-server.mjs --port 8791
   一次模型调用才能走通。
 - **整机的 `listSessions` 返回空** —— 她自己的会话列表 / 开场白 / 设备卡还没接；
   整机目前只服务「当前这一个 DSH 会话」。
-- **C2（全量本地 TTS）未做** —— 22 MB `tts-runtime` + 110 MB 模型，有原生模块与体积
-  问题，单独评估。
+- **C2（全量本地 TTS）已能合成，但还不会「自己开口」**。现在：模型能按上游地址
+  下载 / 校验 / 解包 / 装好，运行时（22 MB sherpa-onnx）随包分发且被**真探测**，
+  合成本身用真实模型实测过（24 kHz / 非静音，`scripts/test-tts-runtime.mjs` 22 项）。
+  **没接的是最后一跳**：把她的回复自动送去合成、再推给整机 iframe 播放。
+  所以「实时语音」开关会被点亮（`canSpeak = bundle && runtime && !failed` 都为真，
+  而这一次这两个标志都**不是**写死的），但打开后她暂时不会出声。
+  音量/静音那两个偏好走上游自己的渲染层 store，同样还没接。
 - **整机页面占 20.1 MB**（16 MB JS + 3 MB 开场段）。开场段可以改成首次运行下载。
 - **B 层的「知识」部分按计划推迟了**。现在实现的是**记忆**（货架 + 做梦账本 +
   四个工具）；Herta 上游 `@herta/knowledge` 里还有一套 sqlite 知识库
@@ -342,7 +518,7 @@ node scripts\mock-llm-server.mjs --port 8791
 
 插件代码（`src/`、`lib/`、`scripts/`、Cordis 配置）为本次改造新写，采用 MIT。
 
-**语音资产（`assets/voice/`）与人设语料（`preset/agent.cordis.yml`）不在 Herta 的
+**语音资产（`assets/voice/`）与人设语料（`preset/herta.patch.yml`）不在 Herta 的
 MIT 范围内**，权利归米哈游及各自所有者。本仓库已按《崩坏：星穹铁道》同人衍生作品
 创作指引 V2.0 第三条放置法律声明后收录：**仅限非商业使用，且不得作为独立素材包再分发**。
 
@@ -363,6 +539,65 @@ MIT 范围内**，权利归米哈游及各自所有者。本仓库已按《崩�
 ---
 
 ## 版本历史
+
+### v0.1.2
+
+**兼容 DSH `0.1.7-rc.2`。** 这一版全部是兼容性修复 —— 0.1.5 → 0.1.7 之间有两处
+破坏性 API 变更，旧版在 0.1.7 上「界面能开、功能静默失效」：
+
+- **修 preset**：DSH 移除了 `$DSH_HOME/.agent-presets/` 目录机制，preset 改成一条
+  `@deepseek-ai/dsh-agent-preset` loader 行。`build-preset.mjs` 重写为生成
+  `preset/herta.patch.yml`，并通过 `dsh.bundle.patch` **数组**随包一起装。
+  修之前的表现是：`--dump-config` 一切正常，但「黑塔」这个 preset 根本不存在 ——
+  A 层人设、B 层提示词段与五个工具、叙述调度层**全部静默缺席**。
+- **修语音偏好**：DSH 移除了 `SettingsProvider.register` 与客户端 `settingsScope`
+  （换成基于插件 Config 的 `SettingsForms`/`configForms`，无第三方命名空间入口）。
+  改为自持：`$DSH_HOME/dsh-herta-voice.json` + 白名单端点 `GET/PUT /herta-settings`。
+  修之前的表现是：宿主打一行 `settings.register is not a function`，客户端那个
+  `ctx.inject(["settingsScope"])` **永不回调** —— 面板能开能点，值永远是默认值。
+- **修构建/测试脚本**：去掉全部写死的本机绝对路径；preset 底本从
+  `dsh-agent-presets/presets/standard/*`（已不存在）改为
+  `dsh-web-app/presets/standard.patch.yml`；`test-dream.mjs` 不再依赖某个
+  已部署的 lab profile（改用 `lib/` + resolve hook），`test-narrative.mjs`
+  的临时目录改到系统 temp。
+- **插件图标**：加 `icon.png`（取自 Herta 上游桌面应用的 `resources/herta-icon.png`，
+  由 1024×1024 / 1.16 MB 缩放重编码为 384×384 / 173 KB），并在 `package.json` 里声明
+  `"icon": "./icon.png"` —— DSH 插件管理页按这个字段显示图标。
+  两条硬约束（见 `@deepseek-ai/dsh-package-manifest` 与 `dsh-app-boot` 的 `iconOf`）：
+  **≤256 KiB**、**必须位于 manifest 所在目录之内**；原图两条都不满足。
+  生成过程留在 `scripts/make-icon.py`，便于换图时复现。
+- **本地语音模型的下载**：从上游扒来并**钉死**在 `src/host/tts-release.js` 的
+  归档参数（`voice-herta-best-e72` / 76,255,506 B / SHA-256），加上完整四段流程
+  （下 → 校验 → 解包 → 再校验 → 原子换入）与 `/herta-voice-model` 端点。
+  同时修了整机 bridge 里三个坏成员：`downloadVoiceModel` 的兜底值曾是
+  `phase:"ready"`（**假绿** —— 盘上什么都没有却显示已就绪）、`onVoiceModel` 从不订阅、
+  `cancelVoiceModelDownload` 是空函数。**模型能下、能校验、能装；还发不出声**（缺运行时）。
+- **修「语音模型显示约 0 MB」**（用户报，看截图发现的）：iframe 那边的
+  `onVoiceModel` 只登记本地监听、**从不通知父窗口**，于是父窗口那个
+  `onVoiceModel` 应答器永远不被触发 —— 它既不去读宿主的模型状态、也不推
+  `voiceModel` 事件。现在订阅会补一次 `call`（与真实 preload 的语义一致），
+  父窗口另外**主动推一次**。实测：iframe 收到的 `unpackedBytes` 从 `0` 变成
+  `115,897,197`，即面板显示「约 116 MB」。
+  > ⚠️ **下载按钮仍然点不了**：上游把它 gate 在 `disabled={!runtime}` 上
+  > （`VoiceSettings.tsx:489` / `:506`），而 `runtime` 指 sherpa-onnx 原生运行时
+  > 在不在。这是上游有意为之：没有运行时，116 MB 的模型下下来也用不了。
+  > 要让它亮起来，得先把那 22 MB 原生件接进来。
+- **随包分发本地 TTS 运行时**（应要求，22 MB）：`assets/tts-runtime/`
+  （sherpa-onnx 1.13.6 + onnxruntime 1.27.1 + espeak-ng/piper-phonemize 的 fork，
+  许可原文见 `LICENSES/`，**espeak-ng 是 GPL-3.0-or-later 且静态链接，分发前需自行拍板** ——
+  见 `THIRD-PARTY.md`）。宿主侧新增 `src/host/tts-runtime.js`（**真探测** + 合成入口）
+  与 `src/host/tts-worker.cjs`（子进程执行体：非 ASCII 路径 / 同步阻塞 / 原生崩溃
+  三重隔离）。`runtime` 从恒为 `false` 变成**探测结果**，于是「下载模型」按钮
+  与「实时语音」开关都会点亮 —— 而这两个标志这次都不是写死的。
+  实测：真实模型合成「你好。我是黑塔…」→ 24 kHz / 5.08 s / 非静音，
+  `test-tts-runtime.mjs` 22 项全过。**仍未接**：回复 → 合成 → iframe 播放那一跳。
+- **验证**：531 项单测 + 28 项集成全过（`test-mapping` 的实际项数从 31 更正为 41；
+  新增 `test-voice-model.mjs` 50 项，用现造的小归档覆盖哈希/体积/穿越/炸弹/取消/
+  「失败不留半个 bundle」/「旧 bundle 在失败下活着」）；
+  在真实 0.1.7-rc.2 运行时冷启动实测 `plane=host` / `plane=preset` /
+  `叙述层依赖就绪` / 四条路由 200；无头 Edge 实测 client 半侧两个视图注册成功、
+  `voiceSettingsLoaded: true`、控制台无错误；
+  模型下载走**真链接**实测（HTTP 进度按字节推进，`content-length` 与 pin 逐字节一致）。
 
 ### v0.1.1
 

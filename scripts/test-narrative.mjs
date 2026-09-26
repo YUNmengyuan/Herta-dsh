@@ -10,10 +10,16 @@
  * 用法：node scripts/test-narrative.mjs
  */
 import { readFileSync, readdirSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { checkFewShot, readNarrative } from "../src/host/narrative.js";
 
-const SEEDS = "E:\\deepseek工作区\\Herta-src\\packages\\herta\\prompts\\feian-seeds";
+/** Herta 源码树（真实种子在这里）。与各 build 脚本同一个环境变量，默认值也一致。 */
+const HERTA_SRC = process.env.HERTA_SRC ?? "E:\\deepseek工作区\\HerTa\\Herta-src";
+const SEEDS = join(HERTA_SRC, "packages", "herta", "prompts", "feian-seeds");
+
+/** 端到端用例的临时工作区。放系统临时目录，**不再往工作区里散落 dot 目录**。 */
+const scratch = (name) => join(tmpdir(), `dsh-herta-${name}-${process.pid}`);
 
 let pass = 0;
 let fail = 0;
@@ -68,7 +74,7 @@ for (const [label, content, expect] of cases) {
 
 console.log("\n=== 端到端：读一个真实货架目录 ===");
 {
-  const root = "E:\\deepseek工作区\\herta-lab\\.narrative-test";
+  const root = scratch("narrative-test");
   const dir = join(root, ".herta", "narrative");
   rmSync(root, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
@@ -90,7 +96,7 @@ console.log("\n=== 端到端：读一个真实货架目录 ===");
 
 console.log("\n=== 预算挑选 ===");
 {
-  const root = "E:\\deepseek工作区\\herta-lab\\.narrative-budget";
+  const root = scratch("narrative-budget");
   const dir = join(root, ".herta", "narrative");
   rmSync(root, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });

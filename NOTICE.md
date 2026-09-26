@@ -27,11 +27,12 @@
 | 路径 | 内容 | 说明 |
 |---|---|---|
 | `assets/voice/` | 80 条 `.opus`，2.55 MB | 角色语音（开场白 / 语气词 / 自我收回 / 彩蛋），C 层语音功能使用 |
-| `preset/agent.cordis.yml` | 46 KB | A 层人格正本，内含 `HertaBio.txt` 逐字，含引用台词 |
+| `preset/herta.patch.yml` | 42 KB | A 层人格正本，内含 `HertaBio.txt` 逐字，含引用台词 |
+| `icon.png` | 384×384 RGBA PNG，173 KB | 插件在 DSH 插件管理页里的图标。取自 Herta 上游桌面应用的 `resources/herta-icon.png`（原图 1024×1024 / 1.16 MB），**缩放重编码**以符合 DSH 清单对图标的两条硬约束（≤256 KiB、必须位于包目录内） |
 
 上游 Herta 项目（<https://www.herta-ai.com/#research>）的 `LICENSE` 用 SCOPE 段声明
 其 MIT 授权**只覆盖源代码**，并明确排除 `data/voice/**` 与 `packages/herta/prompts/**`。
-本仓库收录这两项素材，系经 Herta 原作者同意，并按上述官方指引放置法律声明后为之。
+本仓库收录上述素材，系经 Herta 原作者同意，并按上述官方指引放置法律声明后为之。
 上游项目自身的授权范围说明见 [`THIRD-PARTY.md`](./THIRD-PARTY.md)。
 
 ## 使用者的义务
@@ -46,5 +47,6 @@
 
 ## 移除
 
-若米哈游或任何权利人要求移除相关素材，删除 `assets/voice/` 与 `preset/agent.cordis.yml`
-两项即可，仓库其余部分（插件代码，MIT）不受影响。本声明与相关素材的收录均不构成权利主张。
+若米哈游或任何权利人要求移除相关素材，删除 `assets/voice/`、`preset/herta.patch.yml`
+与 `icon.png` 三项即可（同时把 `package.json` 里的 `"icon"` 字段去掉，插件会回退成
+用包名显示），仓库其余部分（插件代码，MIT）不受影响。本声明与相关素材的收录均不构成权利主张。

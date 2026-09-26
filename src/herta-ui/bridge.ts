@@ -141,13 +141,72 @@ export function createBridge() {
     stageImages: async () => ({ ok: false, message: "整机视图不支持图片暂存" }),
     unstageImage: async () => false,
 
+    // ── 语音（VoiceSettings 的 12 个方法，见 Herta-语音模块-交接.md §2.2）──
+    // 全部由父窗口（DSH client 半侧）应答：
+    //   · 引擎 / 实时语音开关 → 插件自持的偏好文件（`/herta-settings`）
+    //   · 离线模型         → 插件自持的下载端点（`/herta-voice-model`）
+    //
+    // **三个成员以前是坏的，这里都修了**：
+    //   · `downloadVoiceModel` 的兜底值曾是 `phase:"ready"` —— 父窗口没应答时
+    //     界面会显示「已就绪」，而盘上什么都没有。这正是仓库别处修过的「假绿」，
+    //     改成 `absent`：证明不了的可用性一律不声称。
+    //   · `onVoiceModel` 曾是 `() => () => {}`（永不订阅），于是下载进度永远不动。
+    //   · `cancelVoiceModelDownload` 曾是空函数 —— 点了取消什么都不发生。
+    getRealtimeVoice: () => callOr("getRealtimeVoice", null),
+    setRealtimeVoice: (enabled: boolean) =>
+      callOr("setRealtimeVoice", undefined, { next: enabled }),
+    getVoiceEngine: () => callOr("getVoiceEngine", "local"),
+    setVoiceEngine: (engine: string) =>
+      callOr("setVoiceEngine", undefined, { engine }),
+    downloadVoiceModel: () =>
+      callOr("downloadVoiceModel", {
+        phase: "absent",
+        receivedBytes: 0,
+        totalBytes: 0,
+        unpackedBytes: 0,
+      }),
+    onVoiceModel: (cb: Listener) => {
+      // **订阅要通知父窗口**：`on()` 只是本地登记监听，父窗口并不知道有人在等
+      // 这个事件。少了这一句，父窗口那个 `onVoiceModel` 应答器永远不会被触发，
+      // 于是它既不去读宿主的模型状态、也不推 `voiceModel` 事件 —— 设置面板里
+      // 「语音模型」一直显示「约 0 MB」，而按钮/进度也跟着不动（实测踩到）。
+      // 真实 Electron preload 的订阅本来就会走到主进程，这里补上这一步。
+      void callOr("onVoiceModel", undefined);
+      return on("voiceModel", cb);
+    },
+    prepareMiniMaxVoice: () => callOr("prepareMiniMaxVoice", { phase: "absent" }),
+    onMiniMaxVoice: () => () => {},
+    clearMiniMaxKey: () =>
+      callOr("clearMiniMaxKey", {
+        ok: true,
+        status: { set: false, hint: null, encrypted: false },
+      }),
+    setMiniMaxKey: async () => ({ ok: false, reason: "rejected" }),
+    cancelVoiceModelDownload: () => callOr("cancelVoiceModelDownload", undefined),
+    removeVoiceModel: () =>
+      callOr("removeVoiceModel", {
+        phase: "absent",
+        receivedBytes: 0,
+        totalBytes: 0,
+        unpackedBytes: 0,
+      }),
+
     // ── 设置 ──────────────────────────────────────────────────────────────
+    //
+    // **这一组以前是坏的**：三个 getter 返回硬编码常量，三个 setter 是
+    // `async () => {}` 的空实现 —— 她的设置面板能点、点了不报错、值却永远不变
+    // （典型假绿）。现在六个都真的转发给父窗口，父窗口读写 DSH 的设置命名空间
+    // `herta`，也就是 DSH 设置页里「黑塔」那一页的同一份值。
+    //
+    // 参数名跟着上游 `bridge-types.ts` 的契约走（`:617-672`）：
+    //   getDreamConfig/setDreamConfig(cfg)  getLocale/setLocale(locale)
+    //   getCloseToTray/setCloseToTray(enabled)
     getDreamConfig: () => callOr("getDreamConfig", { enabled: true }),
-    setDreamConfig: async () => {},
+    setDreamConfig: (cfg: unknown) => callOr("setDreamConfig", undefined, { cfg }),
     getLocale: () => callOr("getLocale", "zh"),
-    setLocale: async () => {},
-    getCloseToTray: async () => true,
-    setCloseToTray: async () => {},
+    setLocale: (locale: string) => callOr("setLocale", undefined, { locale }),
+    getCloseToTray: () => callOr("getCloseToTray", true),
+    setCloseToTray: (enabled: boolean) => callOr("setCloseToTray", undefined, { enabled }),
     getDeepSeekKeyStatus: () => callOr("getDeepSeekKeyStatus", { set: true, hint: "dsh", encrypted: true }),
     // 密钥由 DSH 自己管，这里如实拒绝而不是假装成功。
     setDeepSeekKey: async () => ({ ok: false, reason: "rejected" as const }),

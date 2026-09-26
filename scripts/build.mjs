@@ -20,7 +20,7 @@
  *    `import x from "./y.js"` 互相引用。磁盘上没有 y.js，只有 y.ts/y.tsx。
  *    esbuild 默认不会做这个替换，必须自己接一个 onResolve。
  */
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -29,7 +29,7 @@ const root = resolve(here, "..");
 const outDir = join(root, "lib");
 
 /** Herta 源码树；界面组件从这里取。可用 HERTA_SRC 覆盖。 */
-const HERTA_SRC = process.env.HERTA_SRC ?? "E:\\deepseek工作区\\Herta-src";
+const HERTA_SRC = process.env.HERTA_SRC ?? "E:\\deepseek工作区\\HerTa\\Herta-src";
 /** Herta 渲染层根目录 —— 等价于官网 vite 配置里的 `@gui` 别名。 */
 const HERTA_RENDERER = join(HERTA_SRC, "packages", "gui", "src", "renderer");
 
@@ -188,10 +188,27 @@ async function main() {
 
   mkdirSync(outDir, { recursive: true });
 
-  // host 半侧：纯 JS，逐文件拷贝（不是只拷 index.js —— 模块会越加越多）。
+  // host 半侧：逐文件拷贝（不是只拷 index.js —— 模块会越加越多）。
+  // `.cjs` 也要：`tts-worker.cjs` 是 CommonJS 的子进程执行体（sherpa 的 glue
+  // 本身就是 CJS，而且它必须在**子进程**里 require 原生件）。
+  //
+  // **先清掉源码里已经没有的旧模块**：拷贝是增量的，删掉一个 host 模块之后
+  // lib/ 里会留着上一版的副本。它不被任何静态 import 引用，所以不会报错，
+  // 只会让「产物里到底有哪些模块」跟源码对不上 —— 排查时最容易骗人的那种不一致。
   const hostSrc = join(root, "src", "host");
+  const hostNames = new Set(readdirSync(hostSrc));
+  for (const name of readdirSync(outDir)) {
+    // 只管 host 半侧的平铺产物：client.js 是本脚本生成的，herta-ui/ 是
+    // build-herta-ui.mjs 的，都不在这里的职责内。
+    if (name === "client.js" || (!name.endsWith(".js") && !name.endsWith(".cjs"))) continue;
+    if (hostNames.has(name)) continue;
+    rmSync(join(outDir, name), { force: true });
+    console.log(`lib/${name} 已删除（源码里没有这个模块了）`);
+  }
   for (const name of readdirSync(hostSrc)) {
-    if (name.endsWith(".js")) copyFileSync(join(hostSrc, name), join(outDir, name));
+    if (name.endsWith(".js") || name.endsWith(".cjs")) {
+      copyFileSync(join(hostSrc, name), join(outDir, name));
+    }
   }
 
   // client 半侧：打包。

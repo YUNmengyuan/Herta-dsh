@@ -25,8 +25,8 @@
  * ```
  * <DSH_HOME>/sessions/<工作区目录名>/<session-id>/session.v3.jsonl.zstd
  * ```
- * 正式环境：`E:\DeepSeek H\data\home\.dsh\sessions\...`
- * lab：`E:\deepseek工作区\herta-lab\.dsh\sessions\...`
+ * 正式环境：`%USERPROFILE%\.dsh\sessions\...`
+ * lab：`$DSH_HOME\sessions\...`
  */
 import { readFileSync } from "node:fs";
 import { zstdDecompressSync } from "node:zlib";

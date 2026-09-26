@@ -1,20 +1,28 @@
 /**
  * 做梦逻辑的测试。
  *
- * 从**已部署的 lib/** 导入，而不是从 src/ —— 因为 `dream.js` 会 import
- * `@deepseek-ai/dsh-tools`，那个包只在 profile 的 node_modules 里能解析到。
- * 从部署位置导入同时也顺带验证了「部署出来的产物是可用的」。
+ * 从**构建产物 `lib/`** 导入（不是 src/）：`dream.js` 会静态 import
+ * `@deepseek-ai/dsh-tools`，而本仓库刻意不带 `node_modules`。
+ * 先用 `test-resolve-hook.mjs` 把 `@deepseek-ai/*` 指到本机 DSH 运行时那份，
+ * 于是这个测试**不再依赖任何已部署的 profile** —— 原版指向 lab profile 的
+ * node_modules，实验室一搬家/重建就断（实测就是这么断的）。
  *
  * 用法：node scripts/test-dream.mjs
+ *   DSH_MODULES / DSH_PACKAGES  指定 DSH 运行时（见 test-resolve-hook.mjs）
+ *   DSH_HERTA_LIB               覆盖要测的产物目录
  */
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const LIB =
-  process.env.DSH_HERTA_LIB ??
-  "E:\\deepseek工作区\\herta-lab\\.dsh\\profiles\\herta-lab\\node_modules\\dsh-herta\\lib";
+const here = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(here, "..");
+
+const LIB = process.env.DSH_HERTA_LIB ?? join(repoRoot, "lib");
+
+// 必须在 import 产物之前注册 —— registerHooks 只影响之后发生的解析。
+await import("./test-resolve-hook.mjs");
 
 const mod = async (name) => import(pathToFileURL(join(LIB, name)).href);
 const { promoteFeian, titleNoveltyOk, normalizeTitle, nextFeianNumber, titlesOf } = await mod("feian.js");
